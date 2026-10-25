@@ -80,6 +80,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 			key = physical
 		}
 		delete(rt.byPosition, physical)
+		if rt.captureInput(InputEvent{Kind: InputKeyUp, Mods: Modifiers(ev.Mods), Key: key, PhysicalKey: physical}, rt.focused) {
+			break
+		}
 		if h := rt.focusHandler(); h != nil {
 			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Mods: Modifiers(ev.Mods)})
 		}
@@ -220,6 +223,10 @@ func (rt *engine) rehover() {
 }
 
 func (rt *engine) pointerMove(x, y float32) {
+	if (x != rt.pointerX || y != rt.pointerY || !rt.pointerIn) && rt.capturePointer(InputEvent{Kind: InputPointerMove, Button: -1, Mods: rt.mods}, x, y) {
+		rt.pointerX, rt.pointerY, rt.pointerIn = x, y, true
+		return
+	}
 	if d := &rt.scrollDrag; d.st != nil {
 		s := d.st
 		g := d.bars(rt.c.theme.scrollbarWidth())
@@ -295,6 +302,9 @@ func (rt *engine) pointerMove(x, y float32) {
 const interactive = flagClickable | flagFocusable | flagEditable | flagSelectable | flagDragWindow | flagDraggable | flagTrackPointer
 
 func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks int) {
+	if rt.capturePointer(InputEvent{Kind: InputPointerDown, Button: button, Clicks: max(1, clicks), Mods: mods}, x, y) {
+		return
+	}
 	rt.downing++
 	defer rt.endDown()
 	chain := rt.hitChain(x, y)
@@ -427,6 +437,17 @@ func (rt *engine) pointerUp(button, clicks int) {
 	if button == rt.pressButton {
 		clicks = rt.pressClicks // the engine's, which may have started over
 	}
+	if rt.capturePointer(InputEvent{Kind: InputPointerUp, Button: button, Clicks: max(1, clicks), Mods: rt.mods}, rt.pointerX, rt.pointerY) {
+		if rt.pressed != nil {
+			rt.pressed.pressed = false
+		}
+		rt.pressed = nil
+		rt.scrollDrag.st = nil
+		rt.selection.dragging = false
+		rt.dragCancel()
+		rt.requestFrame()
+		return
+	}
 	if rt.scrollDrag.st != nil {
 		rt.scrollDrag.st = nil
 		// The pointer may have left the bar, over what the hover missed.
@@ -444,6 +465,15 @@ func (rt *engine) pointerUp(button, clicks int) {
 	}
 	if p := rt.pressed; p != nil && p.input != nil {
 		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1)})
+	}
+	if s := rt.pressed; s != nil && button == 0 && button == rt.pressButton && s.flags&flagDisabled == 0 &&
+		rt.contains(s, Rect{s.x, s.y, s.w, s.h}, rt.pointerX, rt.pointerY) && !s.dragRec.dragged(rt, s) &&
+		rt.capturePointer(InputEvent{Kind: InputClick, Button: button, Clicks: max(1, clicks), Mods: rt.mods}, rt.pointerX, rt.pointerY) {
+		rt.pressed = nil
+		s.pressed = false
+		rt.selection.dragging = false
+		rt.requestFrame()
+		return
 	}
 	if button == 1 && rt.menuRelease() {
 		return
@@ -483,6 +513,9 @@ func (rt *engine) pointerUp(button, clicks int) {
 }
 
 func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool) {
+	if rt.capturePointer(InputEvent{Kind: InputScroll, DX: dx, DY: dy, Mods: mods, Precise: precise, Momentum: momentum}, rt.pointerX, rt.pointerY) {
+		return
+	}
 	chain := rt.appendHitChain(rt.chain[:0], rt.pointerX, rt.pointerY)
 	rt.chain = chain[:0]
 	if h := rt.handler(chain); h != nil && rt.deliver(h, InputEvent{Kind: InputScroll, DX: dx, DY: dy, Mods: mods, Precise: precise, Momentum: momentum}) {
@@ -689,6 +722,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 		delete(rt.byPosition, physical)
 	}
 	if rt.inspectKey(mods, key) {
+		return true
+	}
+	if rt.captureInput(InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Mods: mods, Repeat: repeat}, rt.focused) {
 		return true
 	}
 	k := keyEvent{mods, key}
@@ -952,6 +988,12 @@ func (rt *engine) shortcut(id uint64, mods Modifiers, key Key) bool {
 }
 
 func (rt *engine) editEvent(ev editEvent) {
+	if rt.inputCapture != nil {
+		kind := map[editKind]InputKind{editInsert: InputText, editCompose: InputCompose, editCommand: InputCommand}[ev.kind]
+		if kind != 0 && rt.captureInput(InputEvent{Kind: kind, Text: ev.text, Caret: ev.caret, Mods: rt.mods}, rt.focused) {
+			return
+		}
+	}
 	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
 		if ev.kind == editInsert || ev.kind == editCompose {
 			var r *TextInputRange
