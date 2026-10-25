@@ -6,6 +6,9 @@ import "fmt"
 
 // Context is the window's stable UI context. Use it on the UI thread while
 // building a view. Children share it and temporarily change its parent.
+// It may be retained for explicitly documented UI-thread handle queries,
+// such as Handle.TextSnapshot, between builds. This does not permit building
+// UI or retaining Elements in event callbacks.
 // Publish background results with Window.Update or Services.Invalidate.
 type Context struct {
 	rt       *engine
