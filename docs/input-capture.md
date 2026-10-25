@@ -25,6 +25,21 @@ This native UI API is identical on Linux, macOS, Windows and wasm, adds no
 backend calls or cgo, and is valid only during the element's current build
 pass on the UI thread. Keep a `Handle`, not an `Element`, between frames.
 
+## Bounded list ownership
+
+`ListState.Requested()` reports a half-open overscan window and separate indices
+retained for active input or an open popup. Pins do not enlarge the contiguous
+window. A host that mounts only this window must preserve those pinned rows and
+their identities until they are no longer requested. `ListState.SetKeyIndex`
+accepts an authoritative key lookup for distant reorders; missing keys must
+return false. Passing nil restores the nearby-key search for existing callers.
+
+These APIs coexist with inherited pointer policy: retained rows still inherit
+`PointerEvents`, and keeping a row for keyboard focus does not opt it into
+pointer hits. Keep application-owned handles for identities needed across
+frames. Abandoned handle bindings can be collected; an `Element` or callback-
+scoped `InputTarget` is not a persistent ownership token.
+
 ## Pre-dispatch capture
 
 Install `Context.CaptureInput(func(InputEvent, InputTarget) bool)` once per view

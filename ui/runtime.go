@@ -107,7 +107,8 @@ type engine struct {
 	notices         []*state
 	typedInputs     []*state
 	focusFields     map[any]*focusField
-	refs            []*refState
+	refs            []weak.Pointer[refState]
+	boundRefs       []*refState
 	actions         []action
 	textInputClosed bool
 	view            func(*context)
@@ -917,12 +918,16 @@ func (rt *engine) close() {
 	rt.closed, rt.closing = true, false
 	clear(rt.focusFields)
 	rt.focusFields = nil
-	for _, r := range rt.refs {
-		r.closed = true
-		r.requested = false
+	for _, ref := range rt.refs {
+		if r := ref.Value(); r != nil {
+			r.closed = true
+			r.requested = false
+		}
 	}
 	clear(rt.refs)
 	rt.refs = nil
+	clear(rt.boundRefs)
+	rt.boundRefs = nil
 	clear(rt.parts)
 	rt.parts = nil
 	clear(rt.typedInputs)

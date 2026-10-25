@@ -1,5 +1,7 @@
 package ui
 
+import "weak"
+
 // Handle identifies a control across builds. Bind it to an Element on each
 // pass. One handle may have separate bindings in several windows. Queries
 // take a Context and read committed identity, regardless of build order.
@@ -50,7 +52,7 @@ func (r *Handle) binding(rt *engine, create bool) *refState {
 	b := &refState{window: rt.public, requested: s.pending}
 	s.pending = false
 	s.bindings = append(s.bindings, b)
-	rt.refs = append(rt.refs, b)
+	rt.refs = append(rt.refs, weak.Make(b))
 	return b
 }
 
@@ -124,7 +126,12 @@ func (e Element) Bind(r *Handle) Element {
 	if b.element.Valid() && b.element != e {
 		panic("ui: Handle bound to two controls in one build")
 	}
-	b.element = e
+	if b.element != e {
+		b.element = e
+		// A local handle may be discarded after requesting focus. Keep its
+		// binding through this build, then let the handle own its lifetime.
+		n.c.rt.boundRefs = append(n.c.rt.boundRefs, b)
+	}
 	return e
 }
 
@@ -178,10 +185,13 @@ func (r *Handle) OnShortcut(c *Context, mods Modifiers, key Key, fn func()) {
 }
 
 func (rt *engine) applyFocusRequests() {
-	for _, b := range rt.refs {
-		if b.closed {
+	refs := rt.refs[:0]
+	for _, ref := range rt.refs {
+		b := ref.Value()
+		if b == nil || b.closed {
 			continue
 		}
+		refs = append(refs, ref)
 		if n := b.element.lookup(); n != nil {
 			b.id = n.id
 		}
@@ -199,6 +209,8 @@ func (rt *engine) applyFocusRequests() {
 			rt.consumed = true
 		}
 	}
+	clear(rt.refs[len(refs):])
+	rt.refs = refs
 	rt.applyFocusBindings()
 }
 
