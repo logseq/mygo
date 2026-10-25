@@ -1,5 +1,32 @@
 # Window input capture
 
+## Inherited pointer hit policy
+
+`Element.PointerEvents(false)` makes an element and its descendants transparent
+to pointer hit testing, including native controls' internal labels. Unset
+descendants inherit the policy; an explicit `PointerEvents(true)` re-enables a
+subtree, for example an interactive popover inside a non-interactive overlay
+layer. The root defaults to enabled. The policy is committed each frame and
+does not change paint, layout, keyboard focus, accessibility or input capture
+default-prevention. Ancestors still participate in event bubbling from an
+enabled descendant. `Inert` and `Invisible` cannot be undone with this policy.
+
+This differs from `PassThrough`, which excludes only the element itself:
+
+```go
+ui.Box(c).Fill().PointerEvents(false).Children(func() {
+    ui.Box(c).PointerEvents(true).Children(func() {
+        ui.Button(c, "Action").OnClick(action)
+    })
+})
+```
+
+This native UI API is identical on Linux, macOS, Windows and wasm, adds no
+backend calls or cgo, and is valid only during the element's current build
+pass on the UI thread. Keep a `Handle`, not an `Element`, between frames.
+
+## Pre-dispatch capture
+
 Install `Context.CaptureInput(func(InputEvent, InputTarget) bool)` once per view
 build. It observes input before focused text clients, element handlers, shortcuts,
 menus and native editing consume it. Returning true prevents native handling;

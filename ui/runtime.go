@@ -985,14 +985,17 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.labels = rt.labels[:0]
 	// The window, which the inspector shares with the root.
 	full := Rect{0, 0, w, h}
-	rt.commitElement(root, full, false)
+	rt.commitElement(root, full, false, true)
 	rt.inkStale = false
 	rt.arrangeFocus()
 	rt.noteGroups()
 	rt.committedEpoch = rt.epoch
 }
 
-func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
+func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) {
+	if e.pointerEvents != 0 {
+		pointerEvents = e.pointerEvents > 0
+	}
 	inline := e.isInline()
 	if e.kind == kindText && e.first != nil && !inline {
 		placeInline(e, e, 0)
@@ -1076,7 +1079,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		rt.maxButton = v
 	}
 	switch {
-	case e.flags&flagPassThrough != 0 || invisible:
+	case e.flags&flagPassThrough != 0 || invisible || !pointerEvents:
 	case inline:
 		// Inline elements take the pointer over their words.
 		for _, r := range e.frags {
@@ -1119,18 +1122,18 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	}
 	if ordered := e.layeredChildren(); ordered != nil {
 		for _, ch := range ordered {
-			rt.commitElement(ch, clip, invisible)
+			rt.commitElement(ch, clip, invisible, pointerEvents)
 		}
 	} else {
 		// Children in flow first, absolute ones above them: the paint order.
 		for ch := e.first; ch != nil; ch = ch.next {
 			if ch.flags&flagAbsolute == 0 {
-				rt.commitElement(ch, clip, invisible)
+				rt.commitElement(ch, clip, invisible, pointerEvents)
 			}
 		}
 		for ch := e.first; ch != nil; ch = ch.next {
 			if ch.flags&flagAbsolute != 0 {
-				rt.commitElement(ch, clip, invisible)
+				rt.commitElement(ch, clip, invisible, pointerEvents)
 			}
 		}
 	}
