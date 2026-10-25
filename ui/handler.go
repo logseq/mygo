@@ -52,6 +52,9 @@ const (
 	// with Ctrl held comes as InputZoom too, and a mouse wheel's notches
 	// as InputScroll with Ctrl in Mods.
 	InputZoom
+	// InputClick is emitted only to CaptureInput when a primary pointer release
+	// qualifies as a native click. Returning true suppresses native activation.
+	InputClick
 )
 
 // InputEvent is input an element takes as it comes (HandleInput).
