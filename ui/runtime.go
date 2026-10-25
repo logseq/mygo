@@ -94,6 +94,7 @@ type engine struct {
 	byPosition      map[Key]bool
 	owner           weak.Pointer[engine]
 	epoch           uint64
+	committedEpoch  uint64
 	parts           []any
 	public          *Context
 	arena           *elementOwner
@@ -241,6 +242,9 @@ type engine struct {
 	frameAt time.Time
 
 	pointerX, pointerY float32
+	inputCapture       func(InputEvent, InputTarget) bool
+	captureSerial      uint64
+	capturing          uint64
 	pointerIn          bool
 	hover              []uint64
 	// chain is a buffer for the elements under the pointer.
@@ -535,6 +539,7 @@ func (rt *engine) runFrame() {
 		rt.nextRegs = rt.nextRegs[:0]
 		clear(rt.kept)
 		rt.c.reset(now, appW, h)
+		rt.inputCapture = nil
 		rt.view(&rt.c)
 		if rt.closing {
 			// The view closed the window, as a close button does: the
@@ -905,6 +910,7 @@ func (rt *engine) armTimer() {
 // frame ends: the rest of the view builds with a Context that still works,
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
+	rt.inputCapture = nil
 	if rt.inFrame {
 		rt.closing = true
 		return
@@ -988,6 +994,7 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.inkStale = false
 	rt.arrangeFocus()
 	rt.noteGroups()
+	rt.committedEpoch = rt.epoch
 }
 
 func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
@@ -1115,18 +1122,22 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		r, _ := e.clipRect()
 		clip = intersect(clip, e.visualRect(r))
 	}
-	if ordered:=e.layeredChildren();ordered!=nil {for _,ch:=range ordered {rt.commitElement(ch,clip,invisible)}}else{
-	// Children in flow first, absolute ones above them: the paint order.
-	for ch := e.first; ch != nil; ch = ch.next {
-		if ch.flags&flagAbsolute == 0 {
+	if ordered := e.layeredChildren(); ordered != nil {
+		for _, ch := range ordered {
 			rt.commitElement(ch, clip, invisible)
 		}
-	}
-	for ch := e.first; ch != nil; ch = ch.next {
-		if ch.flags&flagAbsolute != 0 {
-			rt.commitElement(ch, clip, invisible)
+	} else {
+		// Children in flow first, absolute ones above them: the paint order.
+		for ch := e.first; ch != nil; ch = ch.next {
+			if ch.flags&flagAbsolute == 0 {
+				rt.commitElement(ch, clip, invisible)
+			}
 		}
-	}
+		for ch := e.first; ch != nil; ch = ch.next {
+			if ch.flags&flagAbsolute != 0 {
+				rt.commitElement(ch, clip, invisible)
+			}
+		}
 	}
 	e.setInk(vis)
 }
