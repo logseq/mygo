@@ -60,6 +60,7 @@ const (
 	cairoHintMetricsOn         = 2
 	cairoStatusSuccess         = 0
 	fcResultMatch              = 0
+	fcRGBANone                 = 5
 	fcMatchPattern             = 0
 	fcLangEqual                = 0
 	fcSetApplication           = 1
@@ -131,6 +132,7 @@ var pangoLib struct {
 	contextSetBaseDir         func(context uintptr, dir int32)
 	contextSetRoundPositions  func(context uintptr, round int32)
 	fontGetScaledFont         func(font uintptr) uintptr
+	fontGetPattern            func(font uintptr) uintptr
 	fontGetMetrics            func(font, language uintptr) uintptr
 	fontDescribeAbsolute      func(font uintptr) uintptr
 	fontGetHBFont             func(font uintptr) uintptr
@@ -182,6 +184,8 @@ var pangoLib struct {
 	cairoFontOptionsHintStyle func(options uintptr, style int32)
 	cairoFontOptionsSubpixel  func(options uintptr, order int32)
 	cairoScaledFontFace       func(font uintptr) uintptr
+	cairoFontFaceForPattern   func(pattern uintptr) uintptr
+	cairoFontFaceDestroy      func(face uintptr)
 	cairoScaledFontMatrix     func(font uintptr, m *cairoMatrix)
 	cairoScaledFontOptions    func(font, options uintptr)
 	cairoScaledFontCreate     func(face uintptr, fontMatrix, ctm *cairoMatrix, options uintptr) uintptr
@@ -204,6 +208,9 @@ var pangoLib struct {
 	fcConfigParseFromMemory   func(config uintptr, xml string, complain int32) int32
 	fcPatternGetString        func(pattern uintptr, object string, n int32, out **byte) int32
 	fcPatternCreate           func() uintptr
+	fcPatternDuplicate        func(pattern uintptr) uintptr
+	fcPatternDel              func(pattern uintptr, object string) int32
+	fcPatternAddInteger       func(pattern uintptr, object string, value int32) int32
 	fcPatternDestroy          func(pattern uintptr)
 	fcPatternAddString        func(pattern uintptr, object, s string) int32
 	fcPatternGetLangSet       func(pattern uintptr, object string, n int32, out *uintptr) int32
@@ -245,6 +252,14 @@ func loadPango() error {
 	if err != nil {
 		return err
 	}
+	ft, err := open("libpangoft2-1.0.so.0")
+	if err != nil {
+		return err
+	}
+	fc, err := open("libfontconfig.so.1")
+	if err != nil {
+		return err
+	}
 	var missing []string
 	bind := func(lib uintptr, fn any, name string) {
 		sym, err := purego.Dlsym(lib, name)
@@ -264,6 +279,11 @@ func loadPango() error {
 	bind(pangocairo, &l.fontMapNew, "pango_cairo_font_map_new")
 	bind(pangocairo, &l.contextSetFontOptions, "pango_cairo_context_set_font_options")
 	bind(pangocairo, &l.fontGetScaledFont, "pango_cairo_font_get_scaled_font")
+	bind(ft, &l.fontGetPattern, "pango_fc_font_get_pattern")
+	bind(fc, &l.fcPatternDuplicate, "FcPatternDuplicate")
+	bind(fc, &l.fcPatternDestroy, "FcPatternDestroy")
+	bind(fc, &l.fcPatternDel, "FcPatternDel")
+	bind(fc, &l.fcPatternAddInteger, "FcPatternAddInteger")
 	bind(pango, &l.fontMapCreateContext, "pango_font_map_create_context")
 	bind(pango, &l.fontMapLoadFont, "pango_font_map_load_font")
 	bind(pango, &l.contextSetBaseDir, "pango_context_set_base_dir")
@@ -312,6 +332,8 @@ func loadPango() error {
 	bind(cairo, &l.cairoFontOptionsHintStyle, "cairo_font_options_set_hint_style")
 	bind(cairo, &l.cairoFontOptionsSubpixel, "cairo_font_options_set_subpixel_order")
 	bind(cairo, &l.cairoScaledFontFace, "cairo_scaled_font_get_font_face")
+	bind(cairo, &l.cairoFontFaceForPattern, "cairo_ft_font_face_create_for_pattern")
+	bind(cairo, &l.cairoFontFaceDestroy, "cairo_font_face_destroy")
 	bind(cairo, &l.cairoScaledFontMatrix, "cairo_scaled_font_get_font_matrix")
 	bind(cairo, &l.cairoScaledFontOptions, "cairo_scaled_font_get_font_options")
 	bind(cairo, &l.cairoScaledFontCreate, "cairo_scaled_font_create")
@@ -341,24 +363,19 @@ func loadPango() error {
 		bind(hb, &l.hbNominalGlyph, "hb_font_get_nominal_glyph")
 		bind(hb, &l.hbGlyphHAdvance, "hb_font_get_glyph_h_advance")
 	}
-	if ft, err := open("libpangoft2-1.0.so.0"); err == nil {
-		bind(ft, &l.fontMapConfigChanged, "pango_fc_font_map_config_changed")
-	}
-	if fc, err := open("libfontconfig.so.1"); err == nil {
-		bind(fc, &l.fcConfigGetCurrent, "FcConfigGetCurrent")
-		bind(fc, &l.fcConfigAppFontAddFile, "FcConfigAppFontAddFile")
-		bind(fc, &l.fcConfigGetFonts, "FcConfigGetFonts")
-		bind(fc, &l.fcConfigParseFromMemory, "FcConfigParseAndLoadFromMemory")
-		bind(fc, &l.fcPatternGetString, "FcPatternGetString")
-		bind(fc, &l.fcPatternCreate, "FcPatternCreate")
-		bind(fc, &l.fcPatternDestroy, "FcPatternDestroy")
-		bind(fc, &l.fcPatternAddString, "FcPatternAddString")
-		bind(fc, &l.fcPatternGetLangSet, "FcPatternGetLangSet")
-		bind(fc, &l.fcLangSetHasLang, "FcLangSetHasLang")
-		bind(fc, &l.fcConfigSubstitute, "FcConfigSubstitute")
-		bind(fc, &l.fcDefaultSubstitute, "FcDefaultSubstitute")
-		bind(fc, &l.fcFontMatch, "FcFontMatch")
-	}
+	bind(ft, &l.fontMapConfigChanged, "pango_fc_font_map_config_changed")
+	bind(fc, &l.fcConfigGetCurrent, "FcConfigGetCurrent")
+	bind(fc, &l.fcConfigAppFontAddFile, "FcConfigAppFontAddFile")
+	bind(fc, &l.fcConfigGetFonts, "FcConfigGetFonts")
+	bind(fc, &l.fcConfigParseFromMemory, "FcConfigParseAndLoadFromMemory")
+	bind(fc, &l.fcPatternGetString, "FcPatternGetString")
+	bind(fc, &l.fcPatternCreate, "FcPatternCreate")
+	bind(fc, &l.fcPatternAddString, "FcPatternAddString")
+	bind(fc, &l.fcPatternGetLangSet, "FcPatternGetLangSet")
+	bind(fc, &l.fcLangSetHasLang, "FcLangSetHasLang")
+	bind(fc, &l.fcConfigSubstitute, "FcConfigSubstitute")
+	bind(fc, &l.fcDefaultSubstitute, "FcDefaultSubstitute")
+	bind(fc, &l.fcFontMatch, "FcFontMatch")
 	return nil
 }
 
@@ -943,10 +960,20 @@ func (e *pangoEngine) scaledFont(f *Font, scale float32, subpixel bool) uintptr 
 	identity := cairoMatrix{xx: 1, yy: 1}
 	opts := l.cairoFontOptionsCreate()
 	l.cairoScaledFontOptions(src, opts)
+	face := l.cairoScaledFontFace(src)
 	if !subpixel && e.antialias == cairoAntialiasSubpixel {
 		l.cairoFontOptionsAntialias(opts, cairoAntialiasGray)
+		// Cairo's FreeType face options override GRAY with the pattern's
+		// LCD order. Copy the matched face without LCD for the coverage
+		// pass, leaving Pango's font and the opaque subpixel pass intact.
+		pattern := l.fcPatternDuplicate(l.fontGetPattern(f.native))
+		l.fcPatternDel(pattern, "rgba")
+		l.fcPatternAddInteger(pattern, "rgba", fcRGBANone)
+		face = l.cairoFontFaceForPattern(pattern)
+		l.fcPatternDestroy(pattern)
+		defer l.cairoFontFaceDestroy(face)
 	}
-	sf := l.cairoScaledFontCreate(l.cairoScaledFontFace(src), &m, &identity, opts)
+	sf := l.cairoScaledFontCreate(face, &m, &identity, opts)
 	l.cairoFontOptionsDestroy(opts)
 	if sf == 0 || l.cairoScaledFontStatus(sf) != cairoStatusSuccess {
 		return 0

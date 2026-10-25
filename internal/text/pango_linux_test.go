@@ -10,7 +10,47 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"golang.org/x/image/font/gofont/goregular"
 )
+
+func TestPangoGlyphCoverageWithSubpixelSettings(t *testing.T) {
+	e, err := newPango()
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, order := range []string{"rgb", "bgr"} {
+		s := newSystem()
+		s.eng = e
+		if err := s.RegisterFont(goregular.TTF, "MyGo Test Glyph Coverage"); err != nil {
+			t.Fatal(err)
+		}
+		s.SetFontRendering("subpixel", "slight", order)
+		s.TextParams()
+		l := s.Layout(Params{Text: "O", Style: Style{Family: "MyGo Test Glyph Coverage", Size: 32}})
+		g := l.Lines[0].Glyphs[0]
+		for _, opaque := range []bool{false, true} {
+			img := s.Glyph(g.Font, g.ID, 1, 0, 0, opaque)
+			if !img.OK || img.Colored || img.Subpixel != opaque {
+				t.Fatalf("%s opaque=%v: monochrome coverage is %+v", order, opaque, img)
+			}
+			atlas := s.MaskAtlas
+			if img.Subpixel {
+				atlas = s.ColorAtlas
+			}
+			ink := 0
+			for y := range int(img.H) {
+				row := atlas.Pix[((int(img.Y)+y)*atlas.W+int(img.X))*atlas.BPP:]
+				for _, v := range row[:int(img.W)*atlas.BPP] {
+					ink += int(v)
+				}
+			}
+			if ink == 0 {
+				t.Errorf("%s opaque=%v: empty glyph coverage", order, opaque)
+			}
+		}
+	}
+}
 
 // Punctuation and full-width forms in a language that writes Han get the
 // family the language picks before the generic families (#595), and
