@@ -94,6 +94,7 @@ type engine struct {
 	byPosition      map[Key]bool
 	owner           weak.Pointer[engine]
 	epoch           uint64
+	committedEpoch  uint64
 	parts           []any
 	public          *Context
 	arena           *elementOwner
@@ -983,6 +984,7 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.inkStale = false
 	rt.arrangeFocus()
 	rt.noteGroups()
+	rt.committedEpoch = rt.epoch
 }
 
 func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
