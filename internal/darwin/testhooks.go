@@ -69,6 +69,56 @@ func TestOnScreen(handle uintptr) bool {
 	return sendInt(id(handle), "occlusionState")&occlusionStateVisible != 0
 }
 
+// TestWindowNumber returns the WindowServer window ID for capture and recording.
+func TestWindowNumber(handle uintptr) int { return sendInt(id(handle), "windowNumber") }
+
+var testScroll struct {
+	once        sync.Once
+	create      func(uintptr, uint32, uint32, int32, int32, int32) uintptr
+	getLocation func(uintptr) NSPoint
+	setLocation func(uintptr, NSPoint)
+}
+
+// TestScroll delivers a native pixel wheel event at window content coordinates.
+// Positive dx/dy scroll right/down, matching the public headless tester.
+func TestScroll(handle uintptr, x, y, dx, dy float64) bool {
+	w := theBackend.byNSWindow[id(handle)]
+	if w == nil || w.surface == nil {
+		return false
+	}
+	testScroll.once.Do(func() {
+		purego.RegisterLibFunc(&testScroll.create, libCG, "CGEventCreateScrollWheelEvent2")
+		purego.RegisterLibFunc(&testScroll.getLocation, libCG, "CGEventGetLocation")
+		purego.RegisterLibFunc(&testScroll.setLocation, libCG, "CGEventSetLocation")
+	})
+	ok := false
+	withPool(func() {
+		event := testScroll.create(0, 0, 2, -int32(math.Round(dy)), -int32(math.Round(dx)), 0)
+		if event == 0 {
+			return
+		}
+		defer cfRelease(event)
+		bounds := w.ContentBounds()
+		testScroll.setLocation(event, NSPoint{float64(bounds.X) + x, float64(bounds.Y) + y})
+		native := send(class("NSEvent"), "eventWithCGEvent:", event)
+		if native == 0 {
+			return
+		}
+		content := msgRect(send(w.win, "contentView"), sel("frame"))
+		want := NSPoint{x, content.Size.Height - y}
+		at := msgPoint(native, sel("locationInWindow"))
+		location := testScroll.getLocation(event)
+		testScroll.setLocation(event, NSPoint{location.X + want.X - at.X, location.Y - (want.Y - at.Y)})
+		native = send(class("NSEvent"), "eventWithCGEvent:", event)
+		if native == 0 {
+			return
+		}
+		send(w.surface.view, "scrollWheel:", uintptr(native))
+		ok = true
+	})
+	return ok
+}
+
 // TestEndSheet ends the sheet attached to a window as if its first button
 // was clicked, and reports whether there was one.
 func TestEndSheet(handle uintptr) bool {
@@ -99,6 +149,10 @@ func TestAppPress(handle uintptr, x, y float64, down bool) {
 	}
 	testMouse(handle, x, y, true, typ)
 }
+
+// TestDragMove advances a held native gesture without pressing or releasing.
+// Tests may commit a real frame between moves, as a user's gesture does.
+func TestDragMove(handle uintptr, x, y float64) { testMouse(handle, x, y, false, 6) }
 
 func testClick(handle uintptr, x, y float64, viaApp bool) {
 	testMouse(handle, x, y, viaApp, 1, 2) // NSEventTypeLeftMouseDown, LeftMouseUp

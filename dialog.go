@@ -1,6 +1,7 @@
 package mygo
 
 import (
+	"context"
 	"strings"
 
 	"github.com/egoist/mygo/internal/platform"
@@ -115,35 +116,9 @@ func toFilters(fs []FileFilter) []platform.FileFilter {
 
 // Open shows a dialog to pick files or directories and returns the chosen
 // paths, or nil when canceled.
-func (DialogModule) Open(opts OpenDialogOptions) ([]string, error) {
+func (d DialogModule) Open(opts OpenDialogOptions) ([]string, error) {
 	needsApp("Dialog.Open")
-	type result struct {
-		paths []string
-		err   error
-	}
-	ch := make(chan result, 1)
-	popts := &platform.OpenDialogOptions{
-		Title:                      opts.Title,
-		DefaultPath:                opts.DefaultPath,
-		ButtonLabel:                opts.ButtonLabel,
-		Message:                    opts.Message,
-		Filters:                    toFilters(opts.Filters),
-		OpenFiles:                  !opts.Directory,
-		OpenDirectories:            opts.Directory,
-		Multiple:                   opts.Multiple,
-		ShowHiddenFiles:            opts.ShowHiddenFiles,
-		CreateDirectories:          opts.CreateDirectories,
-		TreatPackagesAsDirectories: opts.TreatPackagesAsDirectories,
-	}
-	if !postMain(func() {
-		backend().Dialogs().ShowOpenDialog(opts.Parent.nativeOrNil(), popts, func(paths []string, err error) {
-			deliver(ch, result{paths, err})
-		})
-	}) {
-		return nil, errLoopStopped
-	}
-	r := await(ch)
-	return r.paths, r.err
+	return d.OpenContext(context.Background(), opts)
 }
 
 // Save shows a dialog to choose where to save a file and returns the path,

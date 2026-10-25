@@ -108,6 +108,9 @@ type MenuItem struct {
 	// chosen. Other menus use the focused window, which may be nil.
 	Click func(item *MenuItem, win *Window)
 
+	// imagePNG owns the Content menu icon across deferred native presentation.
+	imagePNG []byte
+
 	uid    int
 	parent *Menu
 	sub    *Menu
@@ -423,6 +426,7 @@ func (it *MenuItem) snapshotLocked() *platform.MenuItem {
 		Visible:     !it.Hidden,
 		Checked:     it.Checked,
 		ToolTip:     it.ToolTip,
+		ImagePNG:    append([]byte(nil), it.imagePNG...),
 	}
 	switch it.Type {
 	case MenuItemSeparator:

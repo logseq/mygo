@@ -169,6 +169,7 @@ var uiaControlTypes = map[platform.AccessRole]int32{
 	platform.RoleMeter: 50012, platform.RoleStepper: 50016, platform.RoleColorWell: 50000, platform.RoleAlertDialog: 50033,
 	platform.RoleMenu: 50009, platform.RoleMenuBar: 50010, platform.RoleMenuItem: 50011, platform.RoleMenuItemCheckBox: 50011,
 	platform.RoleMenuItemRadio: 50011, platform.RoleHeading: 50020,
+	platform.RoleTabPanel: 50033,
 }
 
 // variant is VARIANT, with the value of the types used here.

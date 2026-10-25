@@ -990,6 +990,7 @@ func line(p Params, text []rune, sl shapedLine, offset int, rtl bool, m lineMetr
 		}
 	}
 	size := p.Style.FontSize()
+	var objectAscent float32
 	x0 := float32(math.MaxFloat32)
 	starts := *buf
 	for _, run := range sl.runs {
@@ -1027,6 +1028,7 @@ func line(p Params, text []rune, sl shapedLine, offset int, rtl bool, m lineMetr
 					// it is, whatever font its run took.
 					g.Object, g.Advance, g.ID = true, o.ObjectWidth, 0
 					line.Ascent = max(line.Ascent, o.ObjectHeight)
+					objectAscent = max(objectAscent, o.ObjectHeight)
 				}
 				g.Cluster += offset
 			}
@@ -1044,6 +1046,14 @@ func line(p Params, text []rune, sl shapedLine, offset int, rtl bool, m lineMetr
 	}
 	line.Width = max(line.Width, 0)
 	line.Height = max(m.lineHeight, line.Ascent+line.Descent)
+	if p.Style.LineHeight > 0 {
+		// Explicit line boxes may overlap font ink. Inline objects still
+		// contribute layout height rather than merely overflowing glyphs.
+		line.Height = m.lineHeight
+		if objectAscent > 0 {
+			line.Height = max(line.Height, objectAscent+line.Descent)
+		}
+	}
 	line.Y = *y
 	line.Baseline = *y + (line.Height-line.Ascent-line.Descent)/2 + line.Ascent
 	for i := range line.Glyphs {

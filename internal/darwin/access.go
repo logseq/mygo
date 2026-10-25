@@ -123,7 +123,8 @@ var accessRoles = map[platform.AccessRole][2]string{
 	platform.RoleMenuItemCheckBox: {"AXMenuItem", ""},
 	platform.RoleMenuItemRadio:    {"AXMenuItem", ""},
 	// WebKit's headings, whose value is their level.
-	platform.RoleHeading: {"AXHeading", ""},
+	platform.RoleHeading:  {"AXHeading", ""},
+	platform.RoleTabPanel: {"AXGroup", ""},
 }
 
 // menuItem reports whether nodes of a role are items of a menu.

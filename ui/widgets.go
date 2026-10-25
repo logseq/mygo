@@ -186,8 +186,11 @@ func styleButton(c *context, b *node, primary bool) {
 // Inside a RichText it is a link within the paragraph; give it an empty
 // label and Children to style parts of its text.
 func coreLink(c *context, label, url string) *node {
-	t := c.theme
-	e := coreText(c, label).TextColor(t.Accent).Cursor(CursorPointer).Focusable()
+	e := coreText(c, label).TextColor(c.theme.Accent).Cursor(CursorPointer).Focusable()
+	return linkBehavior(c, e, url)
+}
+
+func linkBehavior(c *context, e *node, url string) *node {
 	e.widget, e.role = "Link", RoleLink
 	router := c.router
 	e.afterInput(func() {

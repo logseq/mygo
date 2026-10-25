@@ -36,6 +36,9 @@ const listSearch = 1000
 // knows of the heights of its rows, kept in the app's state. Give each
 // List a ListState of its own; set its fields before building the List.
 type ListState struct {
+	overscan   *int
+	itemExtent float32
+
 	// Handle names this list independently of its per-pass node.
 	Handle
 
@@ -528,6 +531,9 @@ func (s *ListState) sync(e *node, n int) {
 		s.header.row = -1
 	}
 	s.heights.def = float64(e.c.theme.Space(8))
+	if s.itemExtent > 0 {
+		s.heights.def = float64(s.itemExtent)
+	}
 	if s.Key != nil && n > 0 {
 		if k := s.anchorKey; k != nil {
 			if j, ok := s.find(k, s.anchor, n); ok && j != s.anchor {
@@ -626,10 +632,18 @@ func (s *ListState) find(k any, near, n int) (int, bool) {
 // plan returns the row the place starts from and the rows to build, as far
 // as the heights known tell where the place puts them.
 func (s *ListState) plan(e *node, n int) (a, first, last int) {
+	// Tuned lists defer their first rows until actual local constraints are
+	// known; constructor-time window height is not their viewport height.
+	if !s.laidOut && (s.overscan != nil || s.itemExtent > 0) {
+		return 0, 0, 0
+	}
 	if n == 0 {
 		return 0, 0, 0
 	}
 	view := float64(e.st.h)
+	if proposed, ok := e.height.resolve(e.c.h); ok {
+		view = float64(proposed)
+	}
 	if view <= 0 {
 		view = float64(e.c.h)
 	}
@@ -643,7 +657,8 @@ func (s *ListState) plan(e *node, n int) (a, first, last int) {
 		}
 	case r.set && !r.end:
 		// Rows on both sides cover any alignment.
-		a, y, above = max(0, min(r.row, n-1)), 0, -view
+		a, y = max(0, min(r.row, n-1)), 0
+		above = -view + hs.height(a)
 	case r.end || s.following:
 		a = n - 1
 		y = view - hs.height(a)
@@ -657,7 +672,7 @@ func (s *ListState) plan(e *node, n int) (a, first, last int) {
 		first--
 		yy -= hs.height(first) + gap
 	}
-	return a, max(0, first-listOverscan), min(n, last+listOverscan)
+	return a, max(0, first-s.overscanRows()), min(n, last+s.overscanRows())
 }
 
 // build builds row i in the list.
@@ -1456,11 +1471,11 @@ func (e *node) layoutList(w, h float32) {
 		}
 	}
 	glide := s.glideToEnd(e, n, lo, hi, H, padTop+padBottom+hs.top(n, gap)-gap, func(d float64) { shift(d); cover() })
-	for k := 0; k < listOverscan && hi < n-1 && ensure(hi+1); k++ {
+	for k := 0; k < s.overscanRows() && hi < n-1 && ensure(hi+1); k++ {
 		yHi += ht(hi) + gap
 		hi++
 	}
-	for k := 0; k < listOverscan && lo > 0 && ensure(lo-1); k++ {
+	for k := 0; k < s.overscanRows() && lo > 0 && ensure(lo-1); k++ {
 		lo--
 		yLo -= ht(lo) + gap
 	}

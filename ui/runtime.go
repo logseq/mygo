@@ -85,6 +85,8 @@ type host interface {
 // the view function, lays them out, paints them and routes input to the
 // elements of the last frame. Main thread only, except where noted.
 type engine struct {
+	afterFrame []func()
+
 	// inlineRects is placeInline's scratch, kept from frame to frame.
 	inlineRects []text.Rect
 	// byPosition holds the keys whose press stood for its physical key
@@ -947,6 +949,13 @@ func (rt *engine) close() {
 // during it.
 func (rt *engine) endFrame() {
 	rt.inFrame = false
+	callbacks := rt.afterFrame
+	rt.afterFrame = nil
+	if !rt.closing {
+		for _, callback := range callbacks {
+			callback()
+		}
+	}
 	if rt.closing {
 		rt.close()
 	}
@@ -1101,6 +1110,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		r, _ := e.clipRect()
 		clip = intersect(clip, e.visualRect(r))
 	}
+	if ordered:=e.layeredChildren();ordered!=nil {for _,ch:=range ordered {rt.commitElement(ch,clip,invisible)}}else{
 	// Children in flow first, absolute ones above them: the paint order.
 	for ch := e.first; ch != nil; ch = ch.next {
 		if ch.flags&flagAbsolute == 0 {
@@ -1111,6 +1121,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		if ch.flags&flagAbsolute != 0 {
 			rt.commitElement(ch, clip, invisible)
 		}
+	}
 	}
 	e.setInk(vis)
 }

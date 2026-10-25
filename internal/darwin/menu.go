@@ -153,6 +153,14 @@ func (b *Backend) buildItem(it *platform.MenuItem, owner int) id {
 }
 
 func applyItemState(item id, it *platform.MenuItem) {
+	var image id
+	if len(it.ImagePNG) > 0 {
+		image = autorelease(send(send(class("NSImage"), "alloc"), "initWithData:", uintptr(nsData(it.ImagePNG))))
+		if image != 0 {
+			msgSetSize(image, sel("setSize:"), NSSize{16, 16})
+		}
+	}
+	send(item, "setImage:", uintptr(image))
 	send(item, "setEnabled:", boolArg(it.Enabled))
 	send(item, "setHidden:", boolArg(!it.Visible))
 	state := uintptr(0)

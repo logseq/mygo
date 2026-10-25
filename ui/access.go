@@ -88,6 +88,8 @@ const (
 	// RoleHeading is the title of a section, named by its text, its rank
 	// set with Level.
 	RoleHeading
+	// RoleTabPanel holds the content of the selected tab.
+	RoleTabPanel
 )
 
 // Role sets what the element is to assistive technology, for an element
@@ -185,7 +187,7 @@ func (e *node) accessRole() (platform.AccessRole, bool) {
 // as their name, rather than showing it as elements of its own.
 func leafRole(r platform.AccessRole) bool {
 	switch r {
-	case platform.RoleGroup, platform.RoleList, platform.RoleScroll, platform.RoleDialog, platform.RoleAlertDialog, platform.RolePopup, platform.RoleStatus,
+	case platform.RoleTabPanel, platform.RoleGroup, platform.RoleList, platform.RoleScroll, platform.RoleDialog, platform.RoleAlertDialog, platform.RolePopup, platform.RoleStatus,
 		platform.RoleTabList, platform.RoleTable, platform.RoleRow, platform.RoleCell, platform.RoleTree, platform.RoleListItem,
 		platform.RoleToolbar, platform.RoleRadioGroup, platform.RoleMenu, platform.RoleMenuBar:
 		return false

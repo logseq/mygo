@@ -351,6 +351,9 @@ func (e *node) forgetIntrinsic() {
 // measureIntrinsic measures the max-content or min-content width of an
 // element sized by its content.
 func measureIntrinsic(e *node, maxContent bool) float32 {
+	if e.fitting != nil {
+		return e.fitting.ideal(-1).W + e.padX()
+	}
 	var w float32
 	switch {
 	case e.kind != kindBox:
@@ -483,6 +486,9 @@ func naturalHeight(e *node, w, cbH float32) float32 {
 // contentHeight returns the height the content takes in a content box cw
 // wide.
 func contentHeight(e *node, cw float32) float32 {
+	if e.fitting != nil {
+		return e.fitting.ideal(cw).H
+	}
 	switch e.kind {
 	case kindText:
 		return e.textLayout(max(cw, 1)).Height
@@ -561,6 +567,9 @@ func computeBox(e *node, w, h float32) {
 		return
 	case kindImage, kindIcon:
 		return
+	}
+	if e.fitting != nil {
+		e.fitting.build(cw, ch)
 	}
 	if e.list != nil {
 		e.layoutList(w, h)
@@ -1177,6 +1186,17 @@ func layoutAbsolute(e *node) {
 			// Copies of elements leaving are placed by their transitions.
 			continue
 		}
+		if c.popoverHandle != nil {
+			c.popover = c.c.rt.public.Resolve(*c.popoverHandle).node()
+			if c.popover == nil {
+				c.flags |= flagInvisible
+				c.w, c.h = 0, 0
+				continue
+			}
+			if c.dir&dirSet == 0 {
+				c.setDir(c.popover.rtl(), false)
+			}
+		}
 		if c.attach != 0 {
 			if c.popover != nil {
 				attachTo(c, e, pw, ph)
@@ -1247,9 +1267,12 @@ func layoutAbsolute(e *node) {
 // attachTo places c, a child of e whose padding box is pw×ph, attached to
 // a point of the box of the element it is a popover of (AttachTo).
 func attachTo(c, e *node, pw, ph float32) {
+	t := laidOutVisualBox(c.popover)
 	var w float32
 	if v, ok := c.width.resolve(pw); ok {
 		w = c.clampW(v, pw)
+	} else if c.matchAnchorWidth {
+		w = c.clampW(t.W, pw)
 	} else {
 		w = fitWidth(c, pw, pw)
 	}
@@ -1259,16 +1282,21 @@ func attachTo(c, e *node, pw, ph float32) {
 	} else {
 		h = heightAt(c, w, ph)
 	}
-	t := laidOutVisualBox(c.popover)
+	margin := float32(windowMargin)
+	if c.collisionPadding != nil {
+		margin = *c.collisionPadding
+		w = min(w, max(0, c.c.w-2*margin))
+		h = min(h, max(0, c.c.h-2*margin))
+	}
 	at, self := c.attach.anchors()
 	at, self = at.physical(c.rtl()), self.physical(c.rtl())
 	ax, ay := at.fractions()
 	sx, sy := self.fractions()
 	if c.flags&flagScrollY != 0 {
-		h = min(h, roomAlong(t.Y, t.H, beside(ay, sy), c.m(0)+c.m(2), c.c.h))
+		h = min(h, roomAlongMargin(t.Y, t.H, beside(ay, sy), c.m(0)+c.m(2), c.c.h, margin))
 	}
-	x := alongTarget(t.X, t.W, ax, sx, w, c.m(3)-c.m(1), c.c.w)
-	y := alongTarget(t.Y, t.H, ay, sy, h, c.m(0)-c.m(2), c.c.h)
+	x := alongTargetMargin(t.X, t.W, ax, sx, w, c.m(3)-c.m(1), c.c.w, margin)
+	y := alongTargetMargin(t.Y, t.H, ay, sy, h, c.m(0)-c.m(2), c.c.h, margin)
 	dx, dy := c.relative(pw, ph)
 	ox, oy := laidOutOrigin(e)
 	c.x, c.y = x+dx-ox, y+dy-oy
@@ -1283,9 +1311,12 @@ const windowMargin = 4
 // target for one placed beside it, else the window. One that scrolls, as a
 // select's long list of options, is no longer.
 func roomAlong(t0, tsize float32, beside bool, margins, limit float32) float32 {
-	room := limit - 2*windowMargin - margins
+	return roomAlongMargin(t0, tsize, beside, margins, limit, windowMargin)
+}
+func roomAlongMargin(t0, tsize float32, beside bool, margins, limit, margin float32) float32 {
+	room := limit - 2*margin - margins
 	if beside {
-		room = max(t0, limit-(t0+tsize)) - windowMargin - margins
+		room = max(t0, limit-(t0+tsize)) - margin - margins
 	}
 	return max(room, 0)
 }
@@ -1300,9 +1331,12 @@ func beside(at, self float32) bool { return at == 1 && self == 0 || at == 0 && s
 // along it, where that overflows the window less, then moved into the
 // window along target.
 func alongTarget(t0, tsize, at, self, size, off, limit float32) float32 {
+	return alongTargetMargin(t0, tsize, at, self, size, off, limit, windowMargin)
+}
+func alongTargetMargin(t0, tsize, at, self, size, off, limit, margin float32) float32 {
 	pos := func(at, self, off float32) float32 { return t0 + at*tsize - self*size + off }
 	over := func(p float32) float32 {
-		return max(0, windowMargin-p) + max(0, p+size-(limit-windowMargin))
+		return max(0, margin-p) + max(0, p+size-(limit-margin))
 	}
 	p := pos(at, self, off)
 	if over(p) > 0 {
@@ -1310,8 +1344,8 @@ func alongTarget(t0, tsize, at, self, size, off, limit float32) float32 {
 			p = q
 		}
 	}
-	if !beside(at, self) && over(p) > 0 {
-		p = max(windowMargin, min(p, limit-windowMargin-size))
+	if over(p) > 0 {
+		p = max(margin, min(p, limit-margin-size))
 	}
 	return p
 }

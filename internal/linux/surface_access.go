@@ -314,7 +314,8 @@ func loadAccessNames() {
 		platform.RoleColorWell: {"push button", "button"}, platform.RoleAlertDialog: {"alert", "dialog"},
 		platform.RoleMenu: {"menu"}, platform.RoleMenuBar: {"menu bar"}, platform.RoleMenuItem: {"menu item"},
 		platform.RoleMenuItemCheckBox: {"check menu item", "menu item"}, platform.RoleMenuItemRadio: {"radio menu item", "menu item"},
-		platform.RoleHeading: {"heading", "label"},
+		platform.RoleHeading:  {"heading", "label"},
+		platform.RoleTabPanel: {"panel"},
 	} {
 		atkRoles[r] = role(names...)
 	}

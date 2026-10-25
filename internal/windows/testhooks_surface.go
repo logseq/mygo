@@ -41,7 +41,10 @@ func TestDocumentFeed(hwnd uintptr) (text string, start, length int, ok bool) {
 	rs := (*reconvertString)(unsafe.Pointer(&buf[0]))
 	rs.Size = uint32(size)
 	procSendMessageW.Call(s.hwnd, wmImeRequest, imrDocumentFeed, uintptr(unsafe.Pointer(rs)))
-	units := unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), rs.StrOffset)), rs.StrLen)
+	var units []uint16
+	if rs.StrLen != 0 {
+		units = unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), rs.StrOffset)), rs.StrLen)
+	}
 	from := int(rs.TargetStrOffset / 2)
 	to := from + int(rs.TargetStrLen)
 	return string(utf16.Decode(units)), runeOffset(units, from), runeOffset(units, to) - runeOffset(units, from), true
@@ -65,7 +68,9 @@ func TestComposeOver(hwnd uintptr, text string, caret int, commit bool, from, le
 		a, b := unitOffset(doc, from), unitOffset(doc, from+length)
 		*rs = reconvertString{Size: head + uint32(len(units))*2, StrLen: uint32(len(units)), StrOffset: head,
 			CompStrLen: uint32(b - a), CompStrOffset: uint32(a) * 2, TargetStrLen: uint32(b - a), TargetStrOffset: uint32(a) * 2}
-		copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), head)), len(units)), units)
+		if len(units) != 0 {
+			copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), head)), len(units)), units)
+		}
 		if r, _, _ := procSendMessageW.Call(s.hwnd, wmImeRequest, imrConfirmReconvertString, uintptr(unsafe.Pointer(rs))); r == 0 {
 			return false
 		}

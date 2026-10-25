@@ -147,6 +147,8 @@ const (
 	// RoleHeading is the title of a section, Level its rank: 1 for the
 	// highest.
 	RoleHeading
+	// RoleTabPanel holds the content associated with a tab.
+	RoleTabPanel
 )
 
 // Ranged reports whether nodes of a role have a value in a range (Min,

@@ -3,7 +3,9 @@
 package windows
 
 import (
+	"bytes"
 	"encoding/json"
+	"image/png"
 	"strings"
 	"unsafe"
 
@@ -80,7 +82,11 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 	}
 	// MyGo draws the items of popup menus (menudraw.go), which leave room
 	// for checks when any item has one.
-	drawn := !bar && fluentMenus()
+	images := false
+	for _, it := range m.Items {
+		images = images || it.Visible && len(it.ImagePNG) > 0
+	}
+	drawn := !bar && (fluentMenus() || images)
 	column := false
 	for _, it := range m.Items {
 		column = column || it.Visible && (it.Type == platform.MenuItemCheckbox || it.Type == platform.MenuItemRadio || it.Checked)
@@ -92,7 +98,7 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 		if !drawn {
 			return nil
 		}
-		l.owner, l.column = owner, column
+		l.owner, l.column, l.iconColumn = owner, column, images
 		looks = append(looks, l)
 		var ftype uint32
 		switch {
@@ -120,7 +126,11 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 		if it.Submenu != nil {
 			sub := b.buildMenu(it.Submenu, false, owner, accels)
 			procAppendMenuW.Call(h, flags|mfPopup, sub, uintptr(unsafe.Pointer(u16(it.Label))))
-			look(&menuLook{label: it.Label, submenu: true})
+			l := &menuLook{label: it.Label, submenu: true}
+			if len(it.ImagePNG) > 0 {
+				l.icon, _ = png.Decode(bytes.NewReader(it.ImagePNG))
+			}
+			look(l)
 			continue
 		}
 		if it.Checked {
@@ -137,7 +147,11 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 			}
 		}
 		procAppendMenuW.Call(h, flags, uintptr(cmd), uintptr(unsafe.Pointer(u16(label))))
-		e.look = look(&menuLook{label: it.Label, accel: e.accel, radio: e.radio})
+		l := &menuLook{label: it.Label, accel: e.accel, radio: e.radio}
+		if len(it.ImagePNG) > 0 {
+			l.icon, _ = png.Decode(bytes.NewReader(it.ImagePNG))
+		}
+		e.look = look(l)
 		if e.radio && e.look == nil {
 			setItemInfo(h, cmd, label, it.Enabled, it.Checked, true, false)
 		}

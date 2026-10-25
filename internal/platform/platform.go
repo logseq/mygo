@@ -739,6 +739,8 @@ type Menu struct {
 // MenuItem is a snapshot of a menu item. ID identifies the public item the
 // native item was built from.
 type MenuItem struct {
+	// ImagePNG holds an optional small icon, owned by this menu snapshot.
+	ImagePNG    []byte
 	ID          int
 	Type        MenuItemType
 	Label       string
@@ -759,6 +761,8 @@ type FileFilter struct {
 
 // OpenDialogOptions configures an open panel.
 type OpenDialogOptions struct {
+	// RegisterCancel installs a dialog-specific close operation on the UI thread.
+	RegisterCancel             func(func())
 	Title                      string
 	DefaultPath                string
 	ButtonLabel                string

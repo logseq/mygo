@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"image"
 	"math"
 	"sync"
 	"syscall"
@@ -76,12 +77,14 @@ func fluentMenus() bool { return windows11() }
 
 // menuLook is what an item MyGo draws shows.
 type menuLook struct {
-	owner     int
-	label     string // with its mnemonic's &
-	accel     string
-	separator bool
-	submenu   bool
-	radio     bool
+	icon       image.Image
+	iconColumn bool
+	owner      int
+	label      string // with its mnemonic's &
+	accel      string
+	separator  bool
+	submenu    bool
+	radio      bool
 	// column is whether the menu has a column for the marks of checkable
 	// items, which all its items leave room for.
 	column bool
@@ -363,6 +366,9 @@ func (b *Backend) measureItem(hwnd uintptr, l *menuLook, mis *measureItemStruct)
 	if l.column {
 		w += toPx(menuMarkColumn, dpi)
 	}
+	if l.iconColumn {
+		w += toPx(menuMarkColumn, dpi)
+	}
 	if l.accel != "" {
 		w += toPx(menuAccelGap, dpi) + textWidth(dc, f.text, l.accel)
 	}
@@ -423,6 +429,18 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 					g = glyphBullet
 				}
 				glyph(g, rect{x, r.Top, x + toPx(16, dpi), r.Bottom}, fore)
+			}
+			x += toPx(menuMarkColumn, dpi)
+		}
+		if l.iconColumn {
+			if l.icon != nil {
+				side := toPx(16, dpi)
+				y := (r.Top + r.Bottom - side) / 2
+				back := p.back
+				if selected {
+					back = p.plate
+				}
+				drawMenuIcon(dc, l.icon, x, y, side, back)
 			}
 			x += toPx(menuMarkColumn, dpi)
 		}
@@ -580,4 +598,35 @@ func roundMenu(hwnd uintptr, border uint32) {
 	if style, _, _ := procGetClassLongPtrW.Call(hwnd, gclStyle); style&csDropShadow != 0 {
 		procSetClassLongPtrW.Call(hwnd, gclStyle, style&^csDropShadow)
 	}
+}
+
+// drawMenuIcon scales an RGBA icon into a temporary DIB and composites its
+// alpha over the native item's actual plate. The OS still owns menu input.
+func drawMenuIcon(dc uintptr, source image.Image, x, y, side int32, background uint32) {
+	if side <= 0 {
+		return
+	}
+	target := newBitmap(dc, side, side)
+	if target == nil {
+		return
+	}
+	defer target.free()
+	bounds := source.Bounds()
+	if bounds.Empty() {
+		return
+	}
+	bg := dibColor(background)
+	for row := int32(0); row < side; row++ {
+		for col := int32(0); col < side; col++ {
+			r, g, b, a := source.At(bounds.Min.X+int(col)*bounds.Dx()/int(side), bounds.Min.Y+int(row)*bounds.Dy()/int(side)).RGBA()
+			// Color.RGBA is premultiplied; add the uncovered background directly.
+			inv := uint32(65535 - a)
+			red := (r + ((bg>>16)&255)*257*inv/65535) / 257
+			green := (g + ((bg>>8)&255)*257*inv/65535) / 257
+			blue := (b + (bg&255)*257*inv/65535) / 257
+			target.px[row*side+col] = red<<16 | green<<8 | blue
+		}
+	}
+	procGdiFlush.Call()
+	procBitBlt.Call(dc, uintptr(x), uintptr(y), uintptr(side), uintptr(side), target.dc, 0, 0, srcCopy)
 }

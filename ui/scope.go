@@ -225,6 +225,10 @@ func (rt *engine) pressedWithin(id uint64, e *node) bool {
 	var anchor uint64
 	if e.popover != nil {
 		anchor = e.popover.id
+	} else if e.popoverHandle != nil {
+		if binding := e.popoverHandle.binding(rt, false); binding != nil && !binding.closed {
+			anchor = binding.id
+		}
 	}
 	s := rt.states[id]
 	for range 1000 { // against cycles of anchors

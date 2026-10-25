@@ -37,6 +37,7 @@ const (
 	fdSetOkButtonLabel = 18
 	fdSetFileNameLabel = 19
 	fdGetResult        = 20
+	fdClose            = 23
 	fodGetResults      = 27
 
 	siGetDisplayName = 5
@@ -81,6 +82,9 @@ func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOp
 		opts |= fosForceShowHidden
 	}
 	setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, "", o.DefaultPath, o.Filters)
+	if o.RegisterCancel != nil {
+		o.RegisterCancel(func() { comCall(dlg, fdClose, uintptr(0x800704c7)) })
+	}
 	if failed(comCall(dlg, fdShow, ownerOf(parent))) {
 		cb(nil, nil) // canceled
 		return

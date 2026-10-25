@@ -247,6 +247,7 @@ type menuState struct {
 	release, releaseText uint64
 	pending              *shownMenu
 	chosen               uint64
+	dismissed            uint64
 	choice               int
 	label                string
 }
@@ -457,6 +458,8 @@ func (rt *engine) showMenu() {
 // reports it to ContextMenu's function, or the text input does the
 // command.
 func (rt *engine) menuChosen(p *shownMenu, id int) {
+	rt.menu.dismissed = p.id
+	rt.requestFrame()
 	if id < 1 || id > len(p.labels) {
 		return
 	}

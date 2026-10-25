@@ -22,6 +22,7 @@ import (
 type nativeItem struct {
 	owner    int
 	item     ptr
+	label    ptr
 	check    bool
 	windowID int // menu bar or popup's window; 0 for a tray
 }
@@ -201,7 +202,7 @@ func buildMenu(shell ptr, m *platform.Menu, accel ptr, owner, windowID int) {
 }
 
 func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
-	var item ptr
+	var item, customLabel ptr
 	check := false
 	switch it.Type {
 	case platform.MenuItemSeparator:
@@ -212,6 +213,22 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
 		check = true
 	default:
 		item = gtkMenuItemNewWithLabel(cs(it.Label))
+	}
+	if len(it.ImagePNG) > 0 && it.Type != platform.MenuItemSeparator {
+		if pix, err := pixbufFromPNG(it.ImagePNG); err == nil {
+			row := gtkBoxNew(0, 8)
+			children := gtkContainerGetChildren(item)
+			for link := children; link != 0; link = field[ptr](link, 8) {
+				gtkContainerRemove(item, field[ptr](link, 0))
+			}
+			gListFree(children)
+			gtkBoxPackStart(row, gtkImageNewFromPixbuf(pix), false, false, 0)
+			customLabel = gtkLabelNew(cs(it.Label))
+			gtkBoxPackStart(row, customLabel, true, true, 0)
+			gtkContainerAdd(item, row)
+			nameMenuItem(item, it.Label)
+			gObjectUnref(pix)
+		}
 	}
 	if it.Submenu != nil {
 		sub := gtkMenuNew()
@@ -233,7 +250,7 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
 		}
 	}
 	applyState(item, it, check)
-	itemsByID[it.ID] = append(itemsByID[it.ID], nativeItem{owner: owner, item: item, check: check, windowID: windowID})
+	itemsByID[it.ID] = append(itemsByID[it.ID], nativeItem{owner: owner, item: item, label: customLabel, check: check, windowID: windowID})
 	return item
 }
 
@@ -396,7 +413,12 @@ func firstMenu(bar ptr) ptr {
 func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 	for _, n := range itemsByID[it.ID] {
 		if it.Type != platform.MenuItemSeparator {
-			gtkMenuItemSetLabel(n.item, cs(it.Label))
+			if n.label != 0 {
+				menuLabelSetText(n.label, cs(it.Label))
+				nameMenuItem(n.item, it.Label)
+			} else {
+				gtkMenuItemSetLabel(n.item, cs(it.Label))
+			}
 		}
 		applyState(n.item, it, n.check)
 	}
@@ -458,8 +480,9 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	gMainLoopRun(loop)
 	b.quitLoops = b.quitLoops[:len(b.quitLoops)-1]
 	b.popups = b.popups[:len(b.popups)-1]
-	gMainLoopUnref(loop)
+	// Destroy can emit deactivate again; its callback still owns this loop.
 	gtkWidgetDestroy(menu)
+	gMainLoopUnref(loop)
 }
 
 // Tray icons use AppIndicator (StatusNotifierItem), which shows a menu on

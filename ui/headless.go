@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
+	"image/png"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -603,7 +605,14 @@ func (t *Tester) ChooseMenuItem(path ...string) error {
 }
 
 // CloseMenu closes the context menu shown without choosing an item.
-func (t *Tester) CloseMenu() { t.h.menu, t.h.chosen = nil, nil }
+func (t *Tester) CloseMenu() {
+	chosen := t.h.chosen
+	t.h.menu, t.h.chosen = nil, nil
+	if chosen != nil {
+		chosen(0)
+		t.settle()
+	}
+}
 
 // Press presses (x, y) without releasing; Release releases it.
 func (t *Tester) Press(x, y float32) {
@@ -818,4 +827,26 @@ func (t *Tester) Focused(s string) bool {
 		}
 	}
 	return false
+}
+
+// MenuImage returns the decoded image sent to the native popup service for an
+// item of the currently open menu, or nil. It does not render substitute UI.
+func (t *Tester) MenuImage(label string) image.Image {
+	var find func(*platform.Menu) image.Image
+	find = func(menu *platform.Menu) image.Image {
+		if menu == nil {
+			return nil
+		}
+		for _, it := range menu.Items {
+			if it.Label == label {
+				im, _ := png.Decode(bytes.NewReader(it.ImagePNG))
+				return im
+			}
+			if im := find(it.Submenu); im != nil {
+				return im
+			}
+		}
+		return nil
+	}
+	return find(t.h.menu)
 }

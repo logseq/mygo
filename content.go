@@ -88,13 +88,21 @@ func (w *Window) attachContent() {
 		PlaceWebViews: w.placeWebViews,
 		PopupMenu: func(m *platform.Menu, x, y float64, chosen func(int)) {
 			pos := &platform.Point{X: int(math.Round(x)), Y: int(math.Round(y))}
-			menu := NewMenu(contentMenu(m, chosen))
+			completed := false
+			notify := func(id int) {
+				if !completed {
+					completed = true
+					chosen(id)
+				}
+			}
+			menu := NewMenu(contentMenu(m, notify))
 			// The menu waits for the user in a loop of its own: not in the
 			// event that asked for it, which the surface is handling.
 			postMain(func() {
 				if w.native != nil {
 					menu.popup(w, pos, m.RightToLeft)
 				}
+				notify(0)
 			})
 		},
 	}
@@ -106,7 +114,7 @@ func (w *Window) attachContent() {
 func contentMenu(m *platform.Menu, chosen func(int)) []*MenuItem {
 	items := make([]*MenuItem, 0, len(m.Items))
 	for _, p := range m.Items {
-		it := &MenuItem{Label: p.Label, Accelerator: p.Accelerator, Disabled: !p.Enabled, Hidden: !p.Visible, Checked: p.Checked}
+		it := &MenuItem{Label: p.Label, Accelerator: p.Accelerator, Disabled: !p.Enabled, Hidden: !p.Visible, Checked: p.Checked, imagePNG: append([]byte(nil), p.ImagePNG...)}
 		switch p.Type {
 		case platform.MenuItemSeparator:
 			it.Type = MenuItemSeparator

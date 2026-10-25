@@ -92,6 +92,8 @@ func (c *context) alloc() *node {
 }
 
 func (c *context) reset(now time.Time, w, h float32) {
+	clear(c.rt.afterFrame)
+	c.rt.afterFrame = c.rt.afterFrame[:0]
 	for _, f := range c.rt.focusFields {
 		clear(f.members)
 		f.members = f.members[:0]

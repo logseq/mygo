@@ -208,7 +208,7 @@ func (p *Painter) element(e *node) {
 	}
 	saved := p.opacity
 	if e.flags&flagDisabled != 0 {
-		p.opacity *= 0.5
+		if e.disabledOpacity!=nil {p.opacity*=*e.disabledOpacity}else{p.opacity *= 0.5}
 	}
 	if e.opacitySet {
 		p.opacity *= e.opacity
@@ -301,6 +301,7 @@ func (p *Painter) element(e *node) {
 				}
 			}
 		}
+		if ordered:=e.layeredChildren();ordered!=nil {for _,child:=range ordered {if child.leaving==0 && p.paintable(child){p.element(child)}}}else{
 		for c := e.first; c != nil; c = c.next {
 			if c.flags&flagAbsolute == 0 && p.paintable(c) {
 				p.element(c)
@@ -313,6 +314,7 @@ func (p *Painter) element(e *node) {
 			if c.flags&flagAbsolute != 0 && c.leaving == 0 && p.paintable(c) {
 				p.element(c)
 			}
+		}
 		}
 	}
 	if clips {

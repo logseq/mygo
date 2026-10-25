@@ -45,8 +45,9 @@ const (
 
 // length is a size in DIPs, a percentage of the parent's or automatic.
 type length struct {
-	v float32
-	u unit
+	v      float32
+	u      unit
+	offset float32
 }
 
 // Auto is an automatic margin, which takes the free space on its side, as
@@ -56,8 +57,8 @@ var Auto = float32(math.Inf(1))
 
 func isAuto(v float32) bool { return math.IsInf(float64(v), 1) }
 
-func px(v float32) length      { return length{v, unitPx} }
-func percent(v float32) length { return length{v, unitPercent} }
+func px(v float32) length      { return length{v: v, u: unitPx} }
+func percent(v float32) length { return length{v: v, u: unitPercent} }
 
 // resolve returns the length in DIPs against base, and false for auto or a
 // percentage of an unknown base.
@@ -67,7 +68,7 @@ func (l length) resolve(base float32) (float32, bool) {
 		return l.v, true
 	case unitPercent:
 		if base >= 0 {
-			return l.v / 100 * base, true
+			return l.v/100*base + l.offset, true
 		}
 	}
 	return 0, false
@@ -256,6 +257,12 @@ type layoutStyle struct {
 // Common input queries return false or zero for nil or cleared elements;
 // this does not make references to reused storage safe.
 type node struct {
+	zIndex          int
+	zIndexSet       bool
+	disabledOpacity *float32
+
+	fitting *fittingBuilder
+
 	epoch      uint64
 	key        any
 	valueInput func(*node)
@@ -405,11 +412,14 @@ type node struct {
 	// rowsOf is the list whose rows the element holds for assistive
 	// technology, and takes the keys for: the list, or its Table.
 	// popover is the anchor of the panel of a popover.
-	popover  *node
-	list     *listFrame
-	listRow  bool
-	rowIndex int
-	rowsOf   *listFrame
+	popover          *node
+	popoverHandle    *Handle
+	collisionPadding *float32
+	matchAnchorWidth bool
+	list             *listFrame
+	listRow          bool
+	rowIndex         int
+	rowsOf           *listFrame
 	// focusGroup makes the element a focus group (FocusGroup), whose
 	// arrows click the element they move to with groupSelects.
 	focusGroup   Orientation
