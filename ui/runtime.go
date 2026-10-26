@@ -109,6 +109,7 @@ type engine struct {
 	focusFields     map[any]*focusField
 	refs            []weak.Pointer[refState]
 	boundRefs       []*refState
+	commitRefs      func(*engine)
 	actions         []action
 	textInputClosed bool
 	view            func(*context)
@@ -580,6 +581,9 @@ func (rt *engine) runFrame() {
 	root := rt.c.root
 	layoutTree(root, appW, h)
 	rt.commit(root, w, h)
+	if rt.commitRefs != nil {
+		rt.commitRefs(rt)
+	}
 	// Scrolling can put a new native drop target under a stationary
 	// pointer. Resolve it against this frame's geometry, then rebuild if
 	// needed so DragOver/DataDragOver show the new target too.
@@ -1007,6 +1011,7 @@ func (rt *engine) commit(root *node, w, h float32) {
 }
 
 func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) {
+	e.committed = true
 	if e.pointerEvents != 0 {
 		pointerEvents = e.pointerEvents > 0
 	}

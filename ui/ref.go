@@ -123,6 +123,7 @@ func (e Element) Bind(r *Handle) Element {
 		return e
 	}
 	b := r.binding(n.c.rt, true)
+	n.c.rt.commitRefs = commitHandleBindings
 	if b.element.Valid() && b.element != e {
 		panic("ui: Handle bound to two controls in one build")
 	}
@@ -212,6 +213,19 @@ func (rt *engine) applyFocusRequests() {
 	clear(rt.refs[len(refs):])
 	rt.refs = refs
 	rt.applyFocusBindings()
+}
+
+func commitHandleBindings(rt *engine) {
+	for _, ref := range rt.refs {
+		b := ref.Value()
+		if b == nil || b.closed {
+			continue
+		}
+		b.id = 0
+		if n := b.element.lookup(); n != nil && n.c.rt == rt && n.committed {
+			b.id = n.id
+		}
+	}
 }
 
 // Bounds returns the control's box in the committed frame, in window DIPs.

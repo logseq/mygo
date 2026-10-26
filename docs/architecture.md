@@ -1969,6 +1969,13 @@ persistent control identity separately for each window. Focus queries read
 identity without depending on construction order; focus requests wait for a
 hidden control. `Services` offers persistent clipboard, URL and redraw access.
 
+Handle identities are finalized from the actual committed tree after layout,
+including children built by `Fitting` and virtual lists. `AfterFrame` can read
+their `Bounds` and `FocusWithin` without replaying input, actions or focus
+requests. Omitted bindings lose their identity even when a same-key element
+continues or is recreated; isolated measurement probes never publish bindings
+to the real window.
+
 Constructors build and style controls eagerly. `Context.Key` supplies an ID
 before state initialization. A control takes its input as the public
 constructor that built it returns, as Dear ImGui's widgets do, so what it

@@ -270,6 +270,7 @@ type node struct {
 	id            uint64
 	flags         uint32
 	pointerEvents int8
+	committed     bool
 	parent        *node
 	first         *node
 	last          *node
