@@ -53,7 +53,8 @@ const (
 	// as InputScroll with Ctrl in Mods.
 	InputZoom
 	// InputClick is emitted only to CaptureInput when a primary pointer release
-	// qualifies as a native click. Returning true suppresses native activation.
+	// qualifies as a click, including on a plain hit with no native gesture.
+	// Returning true suppresses any native activation.
 	InputClick
 )
 

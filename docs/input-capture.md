@@ -58,12 +58,25 @@ application identity instead, and validate its incarnation before delayed use.
 No geometry guessing or private engine access is needed. Pointer positions and
 scroll deltas in capture use window DIPs, unlike local `HandleInput` coordinates.
 
-Capture reports raw pointer press/release/movement and `InputClick` when MyGo's
-native hit/press/drag rules qualify a primary release as a click. The latter is
-capture-only and includes the native click count. Click
+Capture reports raw pointer press/release/movement and one `InputClick` when a
+primary gesture qualifies as a click. Native controls keep their existing
+press/drag rules. A plain hit without a native gesture also reports a
+capture-only click: the same committed hit incarnation must survive to release,
+remain enabled and hit-testable, and movement must stay below the native drag
+threshold (4 DIPs), even if the pointer later returns. A prevented down/up,
+window blur, omitted capture registration or retired hit cancels that candidate.
+Plain hits do not acquire native press, focus or activation semantics. The
+callback identifies the actual release hit in window DIPs and carries the
+engine's click count; native controls still activate at most once. Click
 recognition, focus, IME, editor commands and menus remain MyGo's responsibility
 unless explicitly prevented. A pointer release prevented by capture cancels the
 pending native press/drag so it cannot produce a click later.
+
+Hosts upgrading from interactive-only click capture should remove plain-node
+click synthesis or placeholder `OnClick` handlers used solely to enable global
+delegation. For example, leave `ui.Box(c).Bind(&article)` non-interactive and
+observe `InputClick` with `target.Distance(article)` in the window callback.
+Do not forward the same physical click again from an element-local handler.
 
 Native menu commands arrive as `InputCommand` (for example `copy`, `paste`,
 `selectAll`, `undo`). Do not re-inject fabricated physical keys into the runtime.

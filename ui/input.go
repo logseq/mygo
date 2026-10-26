@@ -98,6 +98,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.focusChanged()
 	case platform.SurfaceBlur:
 		rt.windowFocused = false
+		if rt.captureClicks != nil {
+			rt.captureClicks.id = 0
+		}
 		rt.selection.dragging = false
 		// Keys let go of elsewhere never come back up here.
 		rt.modsChanged(0)
@@ -362,6 +365,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 	}
 	rt.requestFrame()
 	if target == nil {
+		if rt.captureClicks != nil {
+			rt.captureClicks.plain, rt.captureClicks.clicks = true, clicks
+		}
 		return
 	}
 	if button == 0 && target.flags&flagMenuButton != 0 && target.flags&flagDisabled == 0 {
@@ -434,7 +440,7 @@ func (rt *engine) pointerUp(button, clicks int) {
 		rt.ups = append(rt.ups, [2]int{button, clicks})
 		return
 	}
-	if button == rt.pressButton {
+	if rt.pressed != nil && button == rt.pressButton {
 		clicks = rt.pressClicks // the engine's, which may have started over
 	}
 	if rt.capturePointer(InputEvent{Kind: InputPointerUp, Button: button, Clicks: max(1, clicks), Mods: rt.mods}, rt.pointerX, rt.pointerY) {
@@ -479,7 +485,13 @@ func (rt *engine) pointerUp(button, clicks int) {
 		return
 	}
 	s := rt.pressed
-	if s == nil || button != rt.pressButton {
+	if s == nil {
+		if rt.releaseCapture != nil {
+			rt.releaseCapture(button)
+		}
+		return
+	}
+	if button != rt.pressButton {
 		return
 	}
 	if rt.selection.dragging {

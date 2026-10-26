@@ -243,6 +243,8 @@ type engine struct {
 
 	pointerX, pointerY float32
 	inputCapture       func(InputEvent, InputTarget) bool
+	captureClicks      *inputCaptureState
+	releaseCapture     func(button int)
 	captureSerial      uint64
 	capturing          uint64
 	pointerIn          bool
@@ -815,6 +817,9 @@ func (rt *engine) forgetInput() {
 // prune forgets the elements the frame did not build, but those of the
 // pages Routers keep.
 func (rt *engine) prune() {
+	if rt.inputCapture == nil {
+		rt.captureClicks, rt.releaseCapture = nil, nil
+	}
 	if d := rt.drag; d != nil && d.native {
 		if s := rt.states[d.src]; s == nil || s.seen != rt.frame || s.pass != rt.pass {
 			rt.host.cancelDataDrag()
@@ -822,6 +827,9 @@ func (rt *engine) prune() {
 	}
 	for id, s := range rt.states {
 		if s.seen != rt.frame || s.pass != rt.pass {
+			if rt.captureClicks != nil && rt.captureClicks.id == id {
+				rt.captureClicks.id = 0
+			}
 			if rt.pressed == s {
 				rt.pressed = nil
 			}
@@ -911,6 +919,7 @@ func (rt *engine) armTimer() {
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
 	rt.inputCapture = nil
+	rt.captureClicks, rt.releaseCapture = nil, nil
 	if rt.inFrame {
 		rt.closing = true
 		return
