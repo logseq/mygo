@@ -2,6 +2,22 @@ package ui
 
 import "slices"
 
+// ScrollOffset reads a committed scroll host's actual offset in DIPs, using
+// the same axes as ScrollState. Non-scrollers and expired bindings report
+// false. Query after layout or between frames on the UI thread; unapplied
+// ScrollState requests are not committed offsets.
+func (r Handle) ScrollOffset(c *Context) (x, y float32, ok bool) {
+	space, ok := r.Coordinates(c)
+	if !ok {
+		return 0, 0, false
+	}
+	n, ok := space.node()
+	if !ok || n.flags&(flagScrollX|flagScrollY) == 0 || n.st == nil {
+		return 0, 0, false
+	}
+	return float32(n.st.scrollX), float32(n.st.scrollY), true
+}
+
 // ScrollState is how far a scroll container scrolls its content, kept in
 // the app's state with TrackScroll.
 type ScrollState struct {

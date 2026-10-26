@@ -119,6 +119,31 @@ func TestLUIMeasureUsesActualTypographyAndDoesNotCommitFocus(t *testing.T) {
 	}
 }
 
+func TestHandleReadsCommittedScrollOffset(t *testing.T) {
+	var handle Handle
+	var offset Point
+	var known bool
+	scrolling := true
+	tt := NewTester(func(c *Context) {
+		c.AfterFrame(func() { offset.X, offset.Y, known = handle.ScrollOffset(c) })
+		Box(c).Size(100, 60).ScrollAxes(scrolling, scrolling).Bind(&handle).Children(func() {
+			Box(c).Size(500, 700)
+		})
+	}, 150, 120)
+	if !known || offset != (Point{}) {
+		t.Fatalf("committed untracked scroll host missing: offset=%+v known=%v", offset, known)
+	}
+	tt.Scroll(20, 20, 35, 50)
+	if !known || offset.X <= 0 || offset.Y <= 0 {
+		t.Fatalf("real wheel offset not observed: offset=%+v known=%v", offset, known)
+	}
+	scrolling = false
+	tt.Frame()
+	if known {
+		t.Fatal("ordinary bound non-scroller reported a known scroll offset")
+	}
+}
+
 func TestLUIListTuningControlsActualRowsBuilt(t *testing.T) {
 	for _, overscan := range []int{0, 8} {
 		var state ListState

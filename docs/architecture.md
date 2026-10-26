@@ -1976,6 +1976,19 @@ requests. Omitted bindings lose their identity even when a same-key element
 continues or is recreated; isolated measurement probes never publish bindings
 to the real window.
 
+`Context.NativeMenuOpen(owner)` reads the native menu presentation state for
+one committed handle, including a menu queued by the committed frame before
+the host presents it. It becomes false on selection or cancellation without
+waiting for `OnMenuDismiss`. Native menu builders also run to deliver a chosen
+item, so builder execution alone does not mean that a menu remains open. This
+query does not change input behavior or observe retained in-window popovers.
+
+`Handle.ScrollOffset(c)` reads the actual committed offset of any bound scroll
+host, including an ordinary `Box.ScrollAxes` without `TrackScroll`. Its axes
+match `ScrollState`. A non-scroller, hidden or expired binding returns
+`ok == false`, not an invented zero offset. Unapplied `ScrollState` requests
+remain distinct from committed position; no scrolling commands are changed.
+
 Constructors build and style controls eagerly. `Context.Key` supplies an ID
 before state initialization. A control takes its input as the public
 constructor that built it returns, as Dear ImGui's widgets do, so what it
