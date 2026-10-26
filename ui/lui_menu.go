@@ -5,6 +5,19 @@ import (
 	"image/color"
 )
 
+// NativeMenuOpen reports whether owner has a native menu presented or queued
+// by the committed frame. Query after layout or between frames on the UI
+// thread. Hidden, omitted and expired bindings return false. This does not
+// observe retained in-window menus or popovers.
+func (c *Context) NativeMenuOpen(owner Handle) bool {
+	space, ok := owner.Coordinates(c)
+	if !ok {
+		return false
+	}
+	menu := &c.runtime().menu
+	return menu.active != nil && menu.active.id == space.id || menu.pending != nil && menu.pending.id == space.id
+}
+
 // OnMenuDismiss observes a native menu closing, after its chosen item has
 // been delivered to ContextMenu or Menu. Cancellation also closes a menu.
 // The latest observer runs after the final frame, only while its host still

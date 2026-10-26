@@ -107,7 +107,9 @@ type engine struct {
 	notices         []*state
 	typedInputs     []*state
 	focusFields     map[any]*focusField
-	refs            []*refState
+	refs            []weak.Pointer[refState]
+	boundRefs       []*refState
+	commitRefs      func(*engine)
 	actions         []action
 	textInputClosed bool
 	view            func(*context)
@@ -242,6 +244,8 @@ type engine struct {
 
 	pointerX, pointerY float32
 	inputCapture       func(InputEvent, InputTarget) bool
+	captureClicks      *inputCaptureState
+	releaseCapture     func(button int)
 	captureSerial      uint64
 	capturing          uint64
 	pointerIn          bool
@@ -577,6 +581,9 @@ func (rt *engine) runFrame() {
 	root := rt.c.root
 	layoutTree(root, appW, h)
 	rt.commit(root, w, h)
+	if rt.commitRefs != nil {
+		rt.commitRefs(rt)
+	}
 	// Scrolling can put a new native drop target under a stationary
 	// pointer. Resolve it against this frame's geometry, then rebuild if
 	// needed so DragOver/DataDragOver show the new target too.
@@ -814,6 +821,9 @@ func (rt *engine) forgetInput() {
 // prune forgets the elements the frame did not build, but those of the
 // pages Routers keep.
 func (rt *engine) prune() {
+	if rt.inputCapture == nil {
+		rt.captureClicks, rt.releaseCapture = nil, nil
+	}
 	if d := rt.drag; d != nil && d.native {
 		if s := rt.states[d.src]; s == nil || s.seen != rt.frame || s.pass != rt.pass {
 			rt.host.cancelDataDrag()
@@ -821,6 +831,9 @@ func (rt *engine) prune() {
 	}
 	for id, s := range rt.states {
 		if s.seen != rt.frame || s.pass != rt.pass {
+			if rt.captureClicks != nil && rt.captureClicks.id == id {
+				rt.captureClicks.id = 0
+			}
 			if rt.pressed == s {
 				rt.pressed = nil
 			}
@@ -910,6 +923,7 @@ func (rt *engine) armTimer() {
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
 	rt.inputCapture = nil
+	rt.captureClicks, rt.releaseCapture = nil, nil
 	if rt.inFrame {
 		rt.closing = true
 		return
@@ -917,12 +931,16 @@ func (rt *engine) close() {
 	rt.closed, rt.closing = true, false
 	clear(rt.focusFields)
 	rt.focusFields = nil
-	for _, r := range rt.refs {
-		r.closed = true
-		r.requested = false
+	for _, ref := range rt.refs {
+		if r := ref.Value(); r != nil {
+			r.closed = true
+			r.requested = false
+		}
 	}
 	clear(rt.refs)
 	rt.refs = nil
+	clear(rt.boundRefs)
+	rt.boundRefs = nil
 	clear(rt.parts)
 	rt.parts = nil
 	clear(rt.typedInputs)
@@ -985,14 +1003,18 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.labels = rt.labels[:0]
 	// The window, which the inspector shares with the root.
 	full := Rect{0, 0, w, h}
-	rt.commitElement(root, full, false)
+	rt.commitElement(root, full, false, true)
 	rt.inkStale = false
 	rt.arrangeFocus()
 	rt.noteGroups()
 	rt.committedEpoch = rt.epoch
 }
 
-func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
+func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) {
+	e.committed = true
+	if e.pointerEvents != 0 {
+		pointerEvents = e.pointerEvents > 0
+	}
 	inline := e.isInline()
 	if e.kind == kindText && e.first != nil && !inline {
 		placeInline(e, e, 0)
@@ -1076,7 +1098,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		rt.maxButton = v
 	}
 	switch {
-	case e.flags&flagPassThrough != 0 || invisible:
+	case e.flags&flagPassThrough != 0 || invisible || !pointerEvents:
 	case inline:
 		// Inline elements take the pointer over their words.
 		for _, r := range e.frags {
@@ -1119,18 +1141,18 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	}
 	if ordered := e.layeredChildren(); ordered != nil {
 		for _, ch := range ordered {
-			rt.commitElement(ch, clip, invisible)
+			rt.commitElement(ch, clip, invisible, pointerEvents)
 		}
 	} else {
 		// Children in flow first, absolute ones above them: the paint order.
 		for ch := e.first; ch != nil; ch = ch.next {
 			if ch.flags&flagAbsolute == 0 {
-				rt.commitElement(ch, clip, invisible)
+				rt.commitElement(ch, clip, invisible, pointerEvents)
 			}
 		}
 		for ch := e.first; ch != nil; ch = ch.next {
 			if ch.flags&flagAbsolute != 0 {
-				rt.commitElement(ch, clip, invisible)
+				rt.commitElement(ch, clip, invisible, pointerEvents)
 			}
 		}
 	}

@@ -246,6 +246,7 @@ type menuState struct {
 	// goes up, as on Windows, on the text releaseText.
 	release, releaseText uint64
 	pending              *shownMenu
+	active               *shownMenu
 	chosen               uint64
 	dismissed            uint64
 	choice               int
@@ -451,6 +452,7 @@ func (rt *engine) showMenu() {
 		return
 	}
 	rt.menu.pending = nil
+	rt.menu.active = p
 	rt.host.popupMenu(p.menu, p.x, p.y, func(id int) { rt.menuChosen(p, id) })
 }
 
@@ -458,6 +460,9 @@ func (rt *engine) showMenu() {
 // reports it to ContextMenu's function, or the text input does the
 // command.
 func (rt *engine) menuChosen(p *shownMenu, id int) {
+	if rt.menu.active == p {
+		rt.menu.active = nil
+	}
 	rt.menu.dismissed = p.id
 	rt.requestFrame()
 	if id < 1 || id > len(p.labels) {

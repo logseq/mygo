@@ -8,6 +8,61 @@ type measurementContext interface {
 	AfterFrame(func())
 }
 
+func TestHandleIdentityAfterDeferredLayout(t *testing.T) {
+	for _, kind := range []string{"fitting", "virtual"} {
+		t.Run(kind, func(t *testing.T) {
+			var current, retired, probe Handle
+			var list ListState
+			list.SetOverscan(0)
+			shown, bound := true, true
+			var bounds, oldBounds, probeBounds Rect
+			var focused bool
+			tt := NewTester(func(c *Context) {
+				c.AfterFrame(func() {
+					bounds, oldBounds, probeBounds = current.Bounds(c), retired.Bounds(c), probe.Bounds(c)
+					focused = current.FocusWithin(c)
+				})
+				build := func(actual *Context) {
+					if !shown {
+						return
+					}
+					box := Box(actual.Key("target")).Size(200, 40)
+					if bound {
+						box.Bind(&current)
+					}
+					box.Children(func() { Button(actual, "Focus").Focus() })
+				}
+				if kind == "virtual" {
+					List(c, &list, 1, func(int) { build(c) }).Size(200, 120)
+				} else {
+					c.Fitting(false, []func(*Context){
+						func(p *Context) { Box(p).Size(180, 30).Bind(&probe) },
+					}, func(actual *Context, _ int) { build(actual) }).Size(200, 120)
+				}
+			}, 200, 120)
+			if bounds.W != 200 || bounds.H != 40 || !focused || probeBounds != (Rect{}) {
+				t.Fatalf("deferred committed identity: bounds=%+v focused=%v probe=%+v", bounds, focused, probeBounds)
+			}
+			bound = false
+			tt.Frame()
+			if bounds != (Rect{}) || focused {
+				t.Fatalf("omitted binding kept a live identity: bounds=%+v focused=%v", bounds, focused)
+			}
+			retired, current = current, Handle{}
+			shown = false
+			tt.Frame()
+			if oldBounds != (Rect{}) {
+				t.Fatalf("retired binding kept bounds: %+v", oldBounds)
+			}
+			shown, bound = true, true
+			tt.Frame()
+			if bounds.W != 200 || bounds.H != 40 || !focused || oldBounds != (Rect{}) {
+				t.Fatalf("recreated identity: bounds=%+v focused=%v retired=%+v", bounds, focused, oldBounds)
+			}
+		})
+	}
+}
+
 func TestLUIFittingMeasuresFinalLocalRoomWithoutActivatingProbes(t *testing.T) {
 	measured, selected, committed := 0, -1, 0
 	var failure string
@@ -61,6 +116,31 @@ func TestLUIMeasureUsesActualTypographyAndDoesNotCommitFocus(t *testing.T) {
 	}
 	if !tester.Focused("actual") || tester.HasText("probe") {
 		t.Fatal("measurement committed probe focus/content")
+	}
+}
+
+func TestHandleReadsCommittedScrollOffset(t *testing.T) {
+	var handle Handle
+	var offset Point
+	var known bool
+	scrolling := true
+	tt := NewTester(func(c *Context) {
+		c.AfterFrame(func() { offset.X, offset.Y, known = handle.ScrollOffset(c) })
+		Box(c).Size(100, 60).ScrollAxes(scrolling, scrolling).Bind(&handle).Children(func() {
+			Box(c).Size(500, 700)
+		})
+	}, 150, 120)
+	if !known || offset != (Point{}) {
+		t.Fatalf("committed untracked scroll host missing: offset=%+v known=%v", offset, known)
+	}
+	tt.Scroll(20, 20, 35, 50)
+	if !known || offset.X <= 0 || offset.Y <= 0 {
+		t.Fatalf("real wheel offset not observed: offset=%+v known=%v", offset, known)
+	}
+	scrolling = false
+	tt.Frame()
+	if known {
+		t.Fatal("ordinary bound non-scroller reported a known scroll offset")
 	}
 }
 

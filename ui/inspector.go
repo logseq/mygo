@@ -236,6 +236,36 @@ func (rt *engine) inspectKey(mods Modifiers, key Key) bool {
 	return false
 }
 
+func (in *inspector) ownsInput(rt *engine, ev InputEvent, id uint64) bool {
+	if in.panel == 0 {
+		return false
+	}
+	if in.contains(rt, id) {
+		return true
+	}
+	switch ev.Kind {
+	case InputPointerMove, InputPointerUp, InputClick:
+		if rt.pressed != nil {
+			return in.contains(rt, rt.pressed.id)
+		}
+	}
+	return false
+}
+
+func (in *inspector) contains(rt *engine, id uint64) bool {
+	for id != 0 {
+		if id == in.panel {
+			return true
+		}
+		s := rt.states[id]
+		if s == nil {
+			break
+		}
+		id = s.parent
+	}
+	return false
+}
+
 // noteSource notes where the app builds the element chosen.
 func (in *inspector) noteSource() { in.source = callSite() }
 
