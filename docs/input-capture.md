@@ -58,6 +58,17 @@ application identity instead, and validate its incarnation before delayed use.
 No geometry guessing or private engine access is needed. Pointer positions and
 scroll deltas in capture use window DIPs, unlike local `HandleInput` coordinates.
 
+Capture is for application input, not the built-in inspector. Keyboard release
+and press, text, composition and menu commands focused in the inspector never
+reach application capture. Pointer/scroll targets in its committed subtree are
+also excluded; a native inspector press retains this isolation while moving or
+releasing outside the panel. The check uses committed ownership, not coordinates
+or application labels. Inspector controls still receive their normal native
+input, and application capture/default-prevention continues while it is open.
+An inspector event cancels any pending plain-hit capture click candidate.
+Hosts must not use inspector input as document shortcuts or editing commands;
+remove any such forwarding. No host-side handler or wire change is needed.
+
 Capture reports raw pointer press/release/movement and one `InputClick` when a
 primary gesture qualifies as a click. Native controls keep their existing
 press/drag rules. A plain hit without a native gesture also reports a

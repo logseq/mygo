@@ -40,7 +40,8 @@ func (t InputTarget) Distance(h Handle) int {
 // menus and pointer handlers consume input; true prevents native handling.
 // Return false to observe without interfering with native editing. Rebuilds
 // that omit the registration remove it. The callback must not build UI or run
-// a nested event loop. Events and pointer coordinates use window DIPs.
+// a nested event loop. Inspector-owned input is private to developer tools.
+// Events and pointer coordinates use window DIPs.
 func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 	if raw := c.build(); raw != nil {
 		rt := raw.rt
@@ -116,6 +117,12 @@ func (s *inputCaptureState) release(button int) {
 
 func (rt *engine) captureInput(ev InputEvent, id uint64) bool {
 	if rt.inputCapture == nil {
+		return false
+	}
+	if rt.insp.ownsInput(rt, ev, id) {
+		if rt.captureClicks != nil {
+			rt.captureClicks.id = 0
+		}
 		return false
 	}
 	rt.captureSerial++
