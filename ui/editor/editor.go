@@ -142,6 +142,9 @@ type editor struct {
 	folds            []fold
 	marked           []ui.TextInputRange // the composition, in bytes per selection
 	markedActive     bool
+	markedEnded      bool
+	markedBefore     Snapshot
+	markedSels       []sel
 	changeDepth      int
 	changeBefore     Snapshot
 	changePending    bool
@@ -363,6 +366,7 @@ func mapSel(s sel, cs []change) sel {
 // it of the old text.
 func (ed *editor) resetForBuffer() {
 	ed.markedActive, ed.changePending, ed.changeBefore = false, false, Snapshot{}
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
 	ed.sels = []sel{{goal: -1, id: ed.nextID}}
 	ed.nextID++
 	ed.selUndo, ed.selRedo = nil, nil

@@ -29,6 +29,11 @@ func TestOnChangeReportsCommittedOperations(t *testing.T) {
 	if !ct.st.Composing() {
 		t.Fatal("preedit was not exposed as composing")
 	}
+	ed.EndComposition()
+	want("a")
+	if _, marked := ed.MarkedRange(); marked || !ct.st.Composing() {
+		t.Fatal("native end accepted rather than hid pending preedit")
+	}
 	ed.ReplaceText(nil, "你😀")
 	want("a", "a你😀")
 	if ct.st.Composing() {
@@ -38,6 +43,20 @@ func TestOnChangeReportsCommittedOperations(t *testing.T) {
 	ed.UnmarkText()
 	ed.UnmarkText()
 	want("a", "a你😀", "a你😀中")
+	ct.tt.SetFocused(false)
+	want("a", "a你😀", "a你😀中")
+	if ct.st.Buffer.String() != "a你😀中" {
+		t.Fatal("release rolled back accepted input")
+	}
+	ct.tt.SetFocused(true)
+	ed.SetMarkedText(nil, "cancel", ui.TextInputRange{Start: 6, End: 6})
+	ed.EndComposition()
+	ct.tt.SetFocused(false)
+	want("a", "a你😀", "a你😀中")
+	if ct.st.Buffer.String() != "a你😀中" || ct.st.Composing() {
+		t.Fatal("release retained unconfirmed preedit")
+	}
+	ct.tt.SetFocused(true)
 	ct.st.Run(Undo)
 	want("a", "a你😀", "a你😀中", "a你😀")
 	ct.st.Run(Redo)

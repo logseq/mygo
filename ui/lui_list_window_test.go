@@ -257,7 +257,7 @@ func TestListRequestedWindowFollowsPinnedKeyAcrossDistantReorder(t *testing.T) {
 
 // Native focus transfer ends preedit through the existing text-input client
 // boundary. A finished composition must not pin an otherwise unused row.
-func TestListRequestedWindowCommitsNativeCompositionBeforeBlurEviction(t *testing.T) {
+func TestListRequestedWindowCancelsNativeCompositionBeforeBlurEviction(t *testing.T) {
 	var s ListState
 	s.SetItemExtent(30)
 	s.SetOverscan(1)
@@ -291,8 +291,8 @@ func TestListRequestedWindowCommitsNativeCompositionBeforeBlurEviction(t *testin
 	if _, marked := client.MarkedRange(); marked {
 		t.Fatal("focus transfer left native preedit unresolved")
 	}
-	if text != "你" {
-		t.Fatalf("native composition was not committed before blur: %q", text)
+	if text != "" {
+		t.Fatalf("blur saved unfinished native composition instead of preserving original text: %q", text)
 	}
 	s.ScrollToEnd()
 	tt.Frame()

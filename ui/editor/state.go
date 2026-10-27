@@ -277,6 +277,7 @@ func (st *State) SetTextFromModel(text string) {
 	st.ensure()
 	ed := &st.ed
 	ed.markedActive, ed.marked = false, nil
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
 	ed.changePending, ed.changeBefore = false, Snapshot{}
 	if st.Buffer.String() != lf(text) {
 		st.Buffer.Reset(text)

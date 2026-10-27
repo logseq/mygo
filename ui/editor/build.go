@@ -66,8 +66,7 @@ func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 	if !o.readOnly {
 		e.HandleTextInput(ed).InputMethod(!o.noInputMethod)
 		if o.noInputMethod && ed.markedActive {
-			// Input methods turned off leave what they composed.
-			ed.UnmarkText()
+			ed.CancelComposition()
 		}
 	}
 	e.HandleInput(ed.input)

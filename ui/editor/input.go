@@ -619,7 +619,7 @@ func (ed *editor) Selection() ui.TextInputSelection {
 }
 
 func (ed *editor) MarkedRange() (ui.TextInputRange, bool) {
-	if !ed.markedActive || len(ed.marked) == 0 {
+	if !ed.markedActive || ed.markedEnded || len(ed.marked) == 0 {
 		return ui.TextInputRange{}, false
 	}
 	t := &ed.view.text
@@ -680,8 +680,10 @@ func (ed *editor) replaceText(r *ui.TextInputRange, s string) {
 		ed.insert(s)
 		return
 	}
+	ed.markedEnded = false
 	ts := ed.targets(r)
 	ed.markedActive, ed.marked = false, nil
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
 	ed.replaceRanges(ts, s, editCompose, -1, -1)
 	if b := ed.buf(); b != nil {
 		b.endGroup()
@@ -698,6 +700,16 @@ func (ed *editor) setMarkedText(r *ui.TextInputRange, s string, selected ui.Text
 	if ed.o.readOnly {
 		return
 	}
+	if s == "" {
+		ed.CancelComposition()
+		return
+	}
+	if !ed.markedActive {
+		ed.markedBefore = ed.buf().Snapshot()
+		ed.markedSels = slices.Clone(ed.sels)
+		ed.buf().endGroup()
+	}
+	ed.markedEnded = false
 	ts := ed.targets(r)
 	// Selected counts UTF-16 units of s.
 	sa, sz := utf16ByteOffset(s, selected.Start), utf16ByteOffset(s, selected.End)
@@ -776,8 +788,38 @@ func (ed *editor) UnmarkText() {
 	ed.beginChange()
 	defer ed.endChange()
 	ed.markedActive, ed.marked = false, nil
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
 	if b := ed.buf(); b != nil {
 		b.endGroup()
+	}
+}
+
+func (ed *editor) EndComposition() {
+	ed.markedEnded = ed.markedActive
+}
+
+func (ed *editor) CancelComposition() {
+	if !ed.markedActive {
+		return
+	}
+	if b := ed.buf(); b != nil {
+		b.mu.Lock()
+		if n := len(b.undo); n > 0 {
+			tx := b.undo[n-1]
+			if tx.owner == ed && tx.kind == editCompose && tx.before.Same(ed.markedBefore.t) && tx.after.Same(b.text) {
+				b.undoStep()
+				b.redo = nil
+			}
+		}
+		b.mu.Unlock()
+	}
+	ed.sync()
+	ed.sels = ed.markedSels
+	ed.markedActive, ed.marked = false, nil
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
+	ed.changePending, ed.changeBefore = false, Snapshot{}
+	if ed.changeDepth > 0 {
+		ed.changeBefore = ed.buf().Snapshot()
 	}
 }
 
