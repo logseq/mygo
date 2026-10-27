@@ -549,10 +549,10 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			button = 2
 		}
 		s.buttons &^= 1 << button
+		s.pointer(platform.PointerUp, lp, button)
 		if s.buttons == 0 {
 			procReleaseCapture.Call()
 		}
-		s.pointer(platform.PointerUp, lp, button)
 		if m == wmRButtonUp {
 			return 0, false // WM_CONTEXTMENU
 		}
@@ -589,6 +589,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		s.buttons = 0
 		if lp != hwnd {
 			s.webCapture = nil
+			s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
 		}
 		return 0, true
 	case wmMouseWheel, wmMouseHWheel:

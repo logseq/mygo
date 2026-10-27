@@ -3980,6 +3980,20 @@ func (_handle Element) Grow(f float32) Element {
 	return wrapElement(_node.Grow(f))
 }
 
+// HandleCapturedPointer is HandleInput with explicit cancellation of primary
+// pointer gestures. A primary down it accepts owns movement and release outside
+// the element. Cancellation never activates a click or a context menu. Other
+// input handlers retain their existing deactivation behavior.
+func (_handle Element) HandleCapturedPointer(fn func(ev InputEvent) bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.HandleCapturedPointer(fn))
+}
+
 // HandleInput has fn take the element's input as it comes, on the main
 // thread, before the next frame is built: keys, text and edit commands
 // while the element has the keyboard focus, the pointer pressed on it,

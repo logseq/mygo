@@ -73,6 +73,7 @@ var (
 	cbSurfaceFocusIn, cbSurfaceFocusOut, cbSurfaceScale, cbIMCommit ptr
 	cbIMPreedit, cbIMPreeditEnd, cbSurfaceRender, cbAreaContext     ptr
 	cbSurfaceUnrealize, cbSurfaceTick, cbSurfacePinch               ptr
+	cbSurfaceGrabBroken                                             ptr
 	surfaceCursors                                                  = map[platform.Cursor]ptr{}
 )
 
@@ -227,6 +228,7 @@ func (s *surface) newArea(gl bool) {
 	connect(s.area, "key-release-event", cbSurfaceKey, data)
 	connect(s.area, "focus-in-event", cbSurfaceFocusIn, data)
 	connect(s.area, "focus-out-event", cbSurfaceFocusOut, data)
+	connect(s.area, "grab-broken-event", cbSurfaceGrabBroken, data)
 }
 
 // contentWidget returns the widget showing the window's content: the web
@@ -700,6 +702,12 @@ func initSurfaceCallbacks() {
 		if s := b().surfaceOf(data); s != nil {
 			gtkIMContextSetClientWindow(s.im, 0)
 		}
+	})
+	cbSurfaceGrabBroken = purego.NewCallback(func(widget, event, data ptr) bool {
+		if s := b().surfaceOf(data); s != nil {
+			s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
+		}
+		return false
 	})
 	cbSurfaceRealize = purego.NewCallback(func(widget, data ptr) {
 		if s := b().surfaceOf(data); s != nil {

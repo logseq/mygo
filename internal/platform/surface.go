@@ -248,6 +248,8 @@ const (
 	// press and what follows: the content notes it, as popovers close for
 	// a press outside them, but handles none of it.
 	WebViewPress
+	// PointerCancel reports capture loss, never a successful release.
+	PointerCancel
 	// WebViewTabOut reports that Tab moved the keyboard out of WebView
 	// past its page's last element, or Shift+Tab (Mods) past its first:
 	// the surface has the keyboard again, and the content moves the focus

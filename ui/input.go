@@ -52,6 +52,8 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.PointerUp:
 		rt.pointerMove(x, y)
 		rt.pointerUp(ev.Button, ev.Clicks)
+	case platform.PointerCancel:
+		rt.pointerCancel()
 	case platform.WebViewPress:
 		rt.webViewPress(x, y, ev.Button)
 	case platform.PointerLeave:
@@ -97,6 +99,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.blinkStart = rt.now()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
+		if rt.pressed != nil && rt.pressed.capturedPointer {
+			rt.pointerCancel()
+		}
 		rt.windowFocused = false
 		if rt.captureClicks != nil {
 			rt.captureClicks.id = 0
@@ -305,6 +310,12 @@ func (rt *engine) pointerMove(x, y float32) {
 const interactive = flagClickable | flagFocusable | flagEditable | flagSelectable | flagDragWindow | flagDraggable | flagTrackPointer
 
 func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks int) {
+	if rt.pressed != nil && rt.pressed.capturedPointer {
+		if button != 0 {
+			return
+		}
+		rt.pointerCancel()
+	}
 	if rt.capturePointer(InputEvent{Kind: InputPointerDown, Button: button, Clicks: max(1, clicks), Mods: mods}, x, y) {
 		return
 	}
@@ -413,6 +424,26 @@ func (rt *engine) endDown() {
 		rt.ups = rt.ups[1:]
 		rt.pointerUp(up[0], up[1])
 	}
+}
+
+func (rt *engine) pointerCancel() {
+	p := rt.pressed
+	if p == nil {
+		return
+	}
+	owned := p.capturedPointer
+	rt.pressed = nil
+	rt.pressDragger = 0
+	rt.downs = rt.downs[:0]
+	rt.captureClicks, rt.releaseCapture = nil, nil
+	p.pressed, p.pressPending, p.released, p.capturedPointer = false, false, false, false
+	if owned {
+		rt.deliver(p, InputEvent{Kind: InputPointerCancel, Button: rt.pressButton, Mods: rt.mods})
+	} else {
+		// Legacy handlers ended their gesture on a synthetic release.
+		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: rt.pressButton, Mods: rt.mods})
+	}
+	rt.requestFrame()
 }
 
 // countPress counts the backend's n-th quick press from the first on the
@@ -724,6 +755,10 @@ func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
 // A chord of a key the layout does not type as a US key, as S on a Cyrillic
 // layout, matches shortcuts by that position; plain typing is untouched.
 func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool) bool {
+	if key == KeyEscape && rt.pressed != nil && rt.pressed.capturedPointer {
+		rt.pointerCancel()
+		return true
+	}
 	if platform.KeyByPosition(platform.Key(key), platform.Key(physical), platform.Modifiers(mods)) {
 		if rt.byPosition == nil {
 			rt.byPosition = map[Key]bool{}
