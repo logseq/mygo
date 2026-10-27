@@ -74,7 +74,7 @@ primary gesture qualifies as a click. Native controls keep their existing
 press/drag rules. A plain hit without a native gesture also reports a
 capture-only click: the same committed hit incarnation must survive to release,
 remain enabled and hit-testable, and movement must stay below the native drag
-threshold (4 DIPs), even if the pointer later returns. A prevented down/up,
+threshold (4 DIPs), even if the pointer later returns. A prevented up,
 window blur, omitted capture registration or retired hit cancels that candidate.
 Plain hits do not acquire native press, focus or activation semantics. The
 callback identifies the actual release hit in window DIPs and carries the
@@ -82,6 +82,16 @@ engine's click count; native controls still activate at most once. Click
 recognition, focus, IME, editor commands and menus remain MyGo's responsibility
 unless explicitly prevented. A pointer release prevented by capture cancels the
 pending native press/drag so it cannot produce a click later.
+
+Preventing pointer-down blocks native focus, selection and press activation,
+but does not cancel the separate capture-only `InputClick`. It follows the same
+live-hit, movement and lifecycle rules as a plain hit. This lets a host cancel
+DOM `mousedown` to keep editor focus while still selecting an autocomplete
+candidate on the matching release. This corrects the earlier behavior where
+preventing down also discarded the capture click. Hosts that need to suppress
+the click must prevent the release, or ignore/prevent `InputClick` itself;
+native control activation remains suppressed by the prevented down. Do not
+work around this by forwarding another click from a local pointer handler.
 
 Hosts upgrading from interactive-only click capture should remove plain-node
 click synthesis or placeholder `OnClick` handlers used solely to enable global

@@ -80,8 +80,11 @@ func (s *inputCaptureState) input(ev InputEvent, target InputTarget) bool {
 	switch ev.Kind {
 	case InputPointerDown:
 		if ev.Button == 0 {
-			s.id, s.plain, s.released = 0, false, false
-			if hit := s.rt.states[target.id]; !prevented && hit != nil && hit.flags&flagDisabled == 0 {
+			// Canceling down suppresses native focus/press, not the independent
+			// capture-only click recognized from the matching real release.
+			s.id, s.plain, s.released = 0, prevented, false
+			s.clicks = max(1, ev.Clicks)
+			if hit := s.rt.states[target.id]; hit != nil && hit.flags&flagDisabled == 0 {
 				s.id, s.born, s.x, s.y = hit.id, hit.born, ev.X, ev.Y
 			}
 		}
