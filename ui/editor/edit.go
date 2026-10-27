@@ -12,6 +12,8 @@ import (
 // moving offsets through the edits; nil moves them as the text around
 // them moves.
 func (ed *editor) apply(edits []Edit, kind editKind, after func(move func(int, bias) int) []sel) bool {
+	ed.beginChange()
+	defer ed.endChange()
 	b := ed.buf()
 	if b == nil || ed.o.readOnly || len(edits) == 0 {
 		return false

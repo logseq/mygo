@@ -41,6 +41,8 @@ func (ed *editor) offer(ev ui.InputEvent) bool {
 // the text as it is when another goroutine edited the buffer meanwhile,
 // rather than leaving the edit out (apply).
 func (ed *editor) retry(fn func() bool) bool {
+	ed.beginChange()
+	defer ed.endChange()
 	for range 4 {
 		ed.sync()
 		ed.stale = false
@@ -771,6 +773,8 @@ func (ed *editor) replaceRanges(ts []ui.TextInputRange, s string, kind editKind,
 }
 
 func (ed *editor) UnmarkText() {
+	ed.beginChange()
+	defer ed.endChange()
 	ed.markedActive, ed.marked = false, nil
 	if b := ed.buf(); b != nil {
 		b.endGroup()

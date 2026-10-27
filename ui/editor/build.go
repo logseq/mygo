@@ -199,45 +199,46 @@ func (ed *editor) accessibility(n *platform.AccessNode) {
 // menu is the editor's context menu: the editing commands, folding, and
 // the app's items.
 func (ed *editor) menu(m *ui.Menu) {
+	run := func(cmd Command) { ed.retry(func() bool { return ed.run(cmd) }) }
 	tx := ed.texts
 	has := slices.ContainsFunc(ed.sels, func(s sel) bool { return !s.empty() })
 	ro := ed.o.readOnly
 	if ed.o.onDefinition != nil {
 		if m.Item(tx.GoToDefinition()).Shortcut(0, ui.KeyF12).Chosen() {
-			ed.run(GoToDefinition)
+			run(GoToDefinition)
 		}
 		m.Separator()
 	}
 	if m.Item(tx.Cut()).Shortcut(ui.Cmd, ui.KeyX).Disabled(ro).Chosen() {
-		ed.run(Cut)
+		run(Cut)
 	}
 	if m.Item(tx.Copy()).Shortcut(ui.Cmd, ui.KeyC).Chosen() {
-		ed.run(Copy)
+		run(Copy)
 	}
 	if m.Item(tx.Paste()).Shortcut(ui.Cmd, ui.KeyV).Disabled(ro).Chosen() {
-		ed.run(Paste)
+		run(Paste)
 	}
 	m.Separator()
 	if m.Item(tx.SelectAll()).Shortcut(ui.Cmd, ui.KeyA).Chosen() {
-		ed.run(SelectAll)
+		run(SelectAll)
 	}
 	if !ro {
 		if m.Item(tx.ToggleComment()).Shortcut(ui.Cmd, ui.KeySlash).Chosen() {
-			ed.run(ToggleComment)
+			run(ToggleComment)
 		}
 	}
 	m.Submenu(tx.Selection(), func(m *ui.Menu) {
 		if m.Item(tx.SelectNextOccurrence()).Shortcut(ui.Cmd, ui.KeyD).Chosen() {
-			ed.run(SelectNext)
+			run(SelectNext)
 		}
 		if m.Item(tx.SelectAllOccurrences()).Shortcut(ui.Cmd|ui.Shift, ui.KeyL).Chosen() {
-			ed.run(SelectAllMatches)
+			run(SelectAllMatches)
 		}
 		if m.Item(tx.ExpandSelection()).Chosen() {
-			ed.run(SelectLarger)
+			run(SelectLarger)
 		}
 		if m.Item(tx.SplitIntoLines()).Disabled(!has).Chosen() {
-			ed.run(SplitSelectionIntoLines)
+			run(SplitSelectionIntoLines)
 		}
 	})
 	if !ro {
@@ -254,7 +255,7 @@ func (ed *editor) menu(m *ui.Menu) {
 					continue
 				}
 				if m.Item(it.label).Chosen() {
-					ed.run(it.cmd)
+					run(it.cmd)
 				}
 			}
 		})
@@ -262,16 +263,16 @@ func (ed *editor) menu(m *ui.Menu) {
 	if ed.o.folding {
 		m.Submenu(tx.Folding(), func(m *ui.Menu) {
 			if m.Item(tx.Fold()).Chosen() {
-				ed.run(Fold)
+				run(Fold)
 			}
 			if m.Item(tx.Unfold()).Chosen() {
-				ed.run(Unfold)
+				run(Unfold)
 			}
 			if m.Item(tx.FoldAll()).Chosen() {
-				ed.run(FoldAll)
+				run(FoldAll)
 			}
 			if m.Item(tx.UnfoldAll()).Chosen() {
-				ed.run(UnfoldAll)
+				run(UnfoldAll)
 			}
 		})
 	}

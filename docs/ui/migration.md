@@ -1,5 +1,49 @@
 # Migrating to checked elements
 
+## Code editor committed changes
+
+`editor.State.OnChange func(text string)` now reports each completed editing
+operation synchronously, after text and selections have updated. Typing,
+paste/cut, commands, undo/redo and `State.Insert`/`State.Run` notify once when
+the resulting text differs. Multiple buffer edits within one operation (such
+as typing with automatic indentation) produce one notification. Selection-only
+operations and direct `Buffer.Set`, `Buffer.Reset`, `Buffer.Edit`, `Buffer.Undo`
+or `Buffer.Redo` do not notify. Use `State.Run(editor.Undo)`/`Redo` when those
+actions should publish an edit.
+
+IME marked text is editor-local preedit: it does not call `OnChange`.
+`State.Composing()` is true until `ReplaceText` commits it, `UnmarkText` accepts
+it, or the composition is removed. The commit reports the final document once,
+even if it equals the last preedit text. Repeated `UnmarkText` does not notify
+again. A composition that leaves the committed document unchanged does not
+notify. This is an event contract, not an OS-specific IME acceptance claim.
+Native adapters that end preedit before delivering a final replacement must
+not use `UnmarkText` as an intermediate end notification: it accepts the current
+text. They must retain the pending composition until its final replacement or
+explicit acceptance. The existing `platform.InputComposition.End` ordering
+needs that separate adapter integration before claiming committed-only native
+IME persistence; this editor API alone does not change that protocol.
+
+Replace frame-by-frame comparisons of `Buffer.String()` with `OnChange` when
+saving documents. Keep `OnInput` for pre-default key routing only; do not save
+from it or from marked-text updates. For authoritative external values, call
+`State.SetTextFromModel(text)` on the UI thread. It cancels pending composition,
+replaces differing text and clears its undo history without calling `OnChange`;
+unmodified text retains its history. Model echoes of the current document need
+no replacement. Applications choose whether to defer external updates while
+`Composing()` or while a query draft is focused.
+
+```go
+state.OnChange = func(text string) { sendDocumentEdit(text) }
+if modelChanged && !state.Composing() && state.Buffer.String() != modelText {
+    state.SetTextFromModel(modelText)
+}
+editor.View(c, &state)
+```
+
+The new callback and methods are opt-in and source-compatible with existing
+editor consumers. Direct buffer mutations retain their existing behavior.
+
 Native UI views receive `*ui.Context`, child builders use `func()` callbacks,
 and widget constructors return `ui.Element` values. This guide covers source
 migration, build lifetimes, persistent control identity and focus bindings.
