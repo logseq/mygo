@@ -17,6 +17,7 @@ type widgetTextInput struct {
 	rt         *engine
 	id         uint64
 	processing bool
+	ended      bool
 }
 
 var _ TextInputClient = (*widgetTextInput)(nil)
@@ -163,7 +164,7 @@ func (w *widgetTextInput) Selection() TextInputSelection {
 
 func (w *widgetTextInput) MarkedRange() (TextInputRange, bool) {
 	w.prepare()
-	if w.ed.compose == "" {
+	if w.ed.compose == "" || w.ended {
 		return TextInputRange{}, false
 	}
 	start := w.ed.buf.utf16At(w.ed.caret)
@@ -175,6 +176,7 @@ func (w *widgetTextInput) MarkedRange() (TextInputRange, bool) {
 
 func (w *widgetTextInput) ReplaceText(r *TextInputRange, s string) {
 	w.prepare()
+	w.ended = false
 	ed := w.ed
 	if ed.readOnly {
 		return
@@ -211,6 +213,11 @@ func (w *widgetTextInput) SetMarkedText(r *TextInputRange, s string, selected Te
 	if ed.readOnly {
 		return
 	}
+	if s == "" {
+		w.CancelComposition()
+		return
+	}
+	w.ended = false
 	if ed.compose == "" || r != nil {
 		a, z := ed.selection()
 		ranges := ed.selectedRanges()
@@ -248,11 +255,26 @@ func (w *widgetTextInput) SetMarkedText(r *TextInputRange, s string, selected Te
 func (w *widgetTextInput) UnmarkText() {
 	w.prepare()
 	ed := w.ed
-	transaction := ed.compositionActive
 	ed.commitCompose()
-	// GTK/IMM32 can end preedit before committing their replacement. The
-	// platform remembers the range; both operations share this undo step.
-	ed.compositionActive = transaction
+	w.ended = false
+	w.publish()
+}
+
+func (w *widgetTextInput) EndComposition() {
+	w.prepare()
+	w.ended = w.ed.compositionActive
+}
+
+func (w *widgetTextInput) CancelComposition() {
+	w.prepare()
+	ed := w.ed
+	if !ed.compositionActive {
+		return
+	}
+	ed.compose, ed.compositionActive, w.ended = "", false, false
+	ed.composeCaret, ed.composeSelected = 0, TextInputRange{}
+	ed.takeBack(false)
+	ed.redo = nil
 	w.publish()
 }
 

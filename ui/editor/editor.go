@@ -53,6 +53,7 @@ type options struct {
 	onGutterClick func(int)
 	contextMenu   func(m *ui.Menu)
 	onInput       func(ui.InputEvent) bool
+	onChange      func(string)
 	noInputMethod bool
 	// The parts' render functions, nil for the editor's own.
 	renderFindBar     func(*ui.Context, ui.Element, *FindBar)
@@ -141,6 +142,12 @@ type editor struct {
 	folds            []fold
 	marked           []ui.TextInputRange // the composition, in bytes per selection
 	markedActive     bool
+	markedEnded      bool
+	markedBefore     Snapshot
+	markedSels       []sel
+	changeDepth      int
+	changeBefore     Snapshot
+	changePending    bool
 	autoclosed       []autoclose
 
 	scrollY    float64
@@ -358,6 +365,8 @@ func mapSel(s sel, cs []change) sel {
 // as it shows another: its carets, folds, marks and what the app gave
 // it of the old text.
 func (ed *editor) resetForBuffer() {
+	ed.markedActive, ed.changePending, ed.changeBefore = false, false, Snapshot{}
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
 	ed.sels = []sel{{goal: -1, id: ed.nextID}}
 	ed.nextID++
 	ed.selUndo, ed.selRedo = nil, nil
@@ -370,6 +379,37 @@ func (ed *editor) resetForBuffer() {
 	ed.gesture.active = false
 	ed.brackets = bracketCache{}
 	ed.scrollY, ed.scrollX, ed.anchorLine, ed.anchorOff = 0, 0, 0, 0
+}
+
+func (ed *editor) beginChange() {
+	if ed.changeDepth == 0 && !ed.changePending && ed.o.onChange != nil {
+		if b := ed.buf(); b != nil {
+			ed.changeBefore = b.Snapshot()
+		}
+	}
+	ed.changeDepth++
+}
+
+func (ed *editor) endChange() {
+	ed.changeDepth--
+	if ed.changeDepth != 0 {
+		return
+	}
+	if ed.markedActive && ed.o.onChange != nil {
+		ed.changePending = true
+		return
+	}
+	before := ed.changeBefore
+	ed.changePending, ed.changeBefore = false, Snapshot{}
+	if b := ed.buf(); b != nil && ed.o.onChange != nil {
+		after := b.Snapshot()
+		if before.Version() != after.Version() {
+			text := after.String()
+			if text != before.String() {
+				ed.o.onChange(text)
+			}
+		}
+	}
 }
 
 // setSels sets the selections, noting the old ones for Undo Selection.

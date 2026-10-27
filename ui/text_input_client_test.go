@@ -13,6 +13,10 @@ type primitiveClient struct {
 	mark             *TextInputRange
 	queries          []TextInputRange
 	changes, unmarks int
+	commits          []string
+	before           string
+	beforeSelection  TextInputSelection
+	composing        bool
 }
 
 func (c *primitiveClient) TextForRange(r TextInputRange) (string, TextInputRange) {
@@ -46,15 +50,36 @@ func (c *primitiveClient) replace(r TextInputRange, text string) {
 func (c *primitiveClient) ReplaceText(r *TextInputRange, text string) {
 	c.replace(c.rangeFor(r), text)
 	c.mark = nil
+	c.composing = false
+	c.commits = append(c.commits, c.text)
 }
 func (c *primitiveClient) SetMarkedText(r *TextInputRange, text string, selected TextInputRange) {
+	if !c.composing {
+		c.before, c.beforeSelection, c.composing = c.text, c.selection, true
+	}
 	wanted := c.rangeFor(r)
 	c.replace(wanted, text)
 	mark := TextInputRange{Start: wanted.Start, End: wanted.Start + UTF16Len(text)}
 	c.mark = &mark
 	c.selection = TextInputSelection{Range: TextInputRange{Start: mark.Start + selected.Start, End: mark.Start + selected.End}}
 }
-func (c *primitiveClient) UnmarkText() { c.mark = nil; c.unmarks++ }
+func (c *primitiveClient) EndComposition() { c.mark = nil }
+func (c *primitiveClient) CancelComposition() {
+	if c.composing {
+		c.text, c.selection = c.before, c.beforeSelection
+	}
+	if c.composing || c.mark != nil {
+		c.unmarks++
+	}
+	c.mark, c.composing = nil, false
+}
+func (c *primitiveClient) UnmarkText() {
+	if c.composing {
+		c.commits = append(c.commits, c.text)
+	}
+	c.mark, c.composing = nil, false
+	c.unmarks++
+}
 func (c *primitiveClient) BoundsForRange(r TextInputRange) (Rect, TextInputRange, bool) {
 	return Rect{float32(r.Start) * 4, 5, max(1, float32(r.End-r.Start)*4), 20}, r, true
 }
@@ -100,25 +125,49 @@ func TestTextInputClientCompositionAndReplacement(t *testing.T) {
 
 func TestTextInputClientNativeEndBeforeCommit(t *testing.T) {
 	c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
-	tt := primitiveTester(c)
+	current := c
+	tt := coreNewTester(func(ctx *context) {
+		coreBox(ctx).Size(250, 80).HandleTextInput(current).AutoFocus()
+	}, 300, 100)
 	defer tt.rt.close()
 	client := tt.h.ime.Client
 	client.SetMarkedText(nil, "😀", TextInputRange{Start: 2, End: 2})
 	var composition platform.InputComposition
 	composition.End(client)
-	if c.mark != nil || c.text != "abc😀" {
-		t.Fatal("unmark removed document content")
+	if c.mark != nil || c.text != "abc😀" || len(c.commits) != 0 {
+		t.Fatal("native end accepted or removed pending preedit", c.text, c.commits)
 	}
 	composition.Replace(client, nil, "é")
-	if c.text != "abcé" {
+	if c.text != "abcé" || len(c.commits) != 1 {
 		t.Fatal("end-before-commit duplicated preedit", c.text)
 	}
 	client.SetMarkedText(nil, "候補", TextInputRange{Start: 2, End: 2})
 	composition.End(client)
-	composition.Reset() // the native client was switched or reset
-	composition.Replace(client, nil, "!")
-	if c.text != "abcé候補!" {
-		t.Fatal("stale commit range survived reset", c.text)
+	tt.SetFocused(false)
+	if c.text != "abcé" || len(c.commits) != 1 {
+		t.Fatal("release saved pending preedit instead of restoring committed text", c.text, c.commits)
+	}
+	composition.Reset()
+	tt.SetFocused(true)
+	client.SetMarkedText(nil, "你", TextInputRange{Start: 1, End: 1})
+	client.UnmarkText()
+	client.UnmarkText()
+	if c.text != "abcé你" || len(c.commits) != 2 {
+		t.Fatal("explicit native accept did not commit once", c.text, c.commits)
+	}
+	tt.SetFocused(false)
+	if c.text != "abcé你" || len(c.commits) != 2 {
+		t.Fatal("release rolled back committed input", c.text, c.commits)
+	}
+	tt.SetFocused(true)
+	client.SetMarkedText(nil, "old", TextInputRange{Start: 3, End: 3})
+	composition.End(client)
+	current = &primitiveClient{text: "new"}
+	tt.Frame()
+	composition.Replace(tt.h.ime.Client, nil, "stale")
+	composition.Replace(client, nil, "stale")
+	if c.text != "abcé你" || len(c.commits) != 2 || current.text != "new" || len(current.commits) != 0 {
+		t.Fatal("old composition survived client replacement", c.text, c.commits, current.text)
 	}
 }
 

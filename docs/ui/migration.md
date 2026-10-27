@@ -1,5 +1,99 @@
 # Migrating to checked elements
 
+## Code editor committed changes
+
+`editor.State.OnChange func(text string)` now reports each completed editing
+operation synchronously, after text and selections have updated. Typing,
+paste/cut, commands, undo/redo and `State.Insert`/`State.Run` notify once when
+the resulting text differs. Multiple buffer edits within one operation (such
+as typing with automatic indentation) produce one notification. Selection-only
+operations and direct `Buffer.Set`, `Buffer.Reset`, `Buffer.Edit`, `Buffer.Undo`
+or `Buffer.Redo` do not notify. Use `State.Run(editor.Undo)`/`Redo` when those
+actions should publish an edit.
+
+IME marked text is editor-local preedit: it does not call `OnChange`.
+`State.Composing()` is true until `ReplaceText` commits it, `UnmarkText` accepts
+it, or the composition is removed. The commit reports the final document once,
+even if it equals the last preedit text. Repeated `UnmarkText` does not notify
+again. A composition that leaves the committed document unchanged does not
+notify. This is an event contract, not an OS-specific IME acceptance claim.
+Native end-before-commit adapters now use the mandatory composition phases
+below. `EndComposition` hides marking without accepting preedit; `Composing()`
+remains true until final replacement, explicit acceptance or cancellation.
+
+Replace frame-by-frame comparisons of `Buffer.String()` with `OnChange` when
+saving documents. Keep `OnInput` for pre-default key routing only; do not save
+from it or from marked-text updates. For authoritative external values, call
+`State.SetTextFromModel(text)` on the UI thread. It cancels pending composition,
+replaces differing text and clears its undo history without calling `OnChange`;
+unmodified text retains its history. Model echoes of the current document need
+no replacement. Applications choose whether to defer external updates while
+`Composing()` or while a query draft is focused.
+
+```go
+state.OnChange = func(text string) { sendDocumentEdit(text) }
+if modelChanged && !state.Composing() && state.Buffer.String() != modelText {
+    state.SetTextFromModel(modelText)
+}
+editor.View(c, &state)
+```
+
+The editor callback and state methods are opt-in. Direct buffer mutations retain
+their existing behavior; use `SetTextFromModel` for controlled model replacement,
+not a direct buffer edit during local composition.
+
+## Text input composition phases
+
+This is a source-breaking change to custom `ui.TextInputClient` implementations:
+add mandatory `EndComposition()` and `CancelComposition()` methods. There is no
+optional interface or legacy fallback. Built-in widgets, code/richtext editors
+and the text-input example implement the same phases. No native surface API
+change is required.
+
+- `SetMarkedText` starts/updates pending preedit and remembers the original text
+  and selection for cancellation. Do not publish a committed document from it.
+- `EndComposition` clears marking (`MarkedRange` becomes false), but retains the
+  pending text, replacement range and original state. It must not notify a save
+  or accept callback. Repeated end is harmless.
+- `ReplaceText` applies the final replacement and publishes one committed edit.
+  The native end-before-commit helper retains its UTF-16 replacement range and
+  client identity; it drops a pending replacement directed at a different client.
+- `UnmarkText` is explicit acceptance, including macOS native unmark. It accepts
+  current pending text once. Repeated acceptance does not publish again.
+- `CancelComposition` restores only unfinished preedit's original text and
+  selection, clears marking/pending state and publishes no committed edit.
+  It must be idempotent and must not undo an already committed edit.
+
+The UI adapter calls `CancelComposition` on release: focus loss, disposal, runtime
+close and client replacement. Ordinary focus loss is not acceptance. A native
+`ReplaceText` or explicit `UnmarkText` received before release remains committed;
+a later release is a no-op for it. Old native client adapters reject callbacks
+after replacement and cannot edit the new client. The platform continues to
+reset its pending replacement range when its native client is reset.
+
+For a custom string client, keep `pending` separate from visible `marked` status:
+
+```go
+// SetMarkedText must first retain beforeText/beforeSelection for a new preedit.
+func (c *Client) EndComposition() { c.marked = false }
+func (c *Client) CancelComposition() {
+    if !c.pending { return }
+    c.text, c.selection = c.beforeText, c.beforeSelection
+    c.marked, c.pending = false, false
+}
+func (c *Client) UnmarkText() {
+    if !c.pending { return }
+    c.marked, c.pending = false, false
+    c.publishCommitted(c.text)
+}
+```
+
+For a virtual-preedit client, acceptance inserts its virtual text before
+publishing; cancellation removes it and restores any selection it replaced.
+The code editor also discards the cancelled preedit's undo/redo transaction.
+These contracts are covered by deterministic native-order and editor tests,
+not a claim of real OS IME or Web/native product parity.
+
 Native UI views receive `*ui.Context`, child builders use `func()` callbacks,
 and widget constructors return `ui.Element` values. This guide covers source
 migration, build lifetimes, persistent control identity and focus bindings.

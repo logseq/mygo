@@ -114,10 +114,11 @@ type view struct {
 	desiredX         float32
 	hasDesired       bool
 	// An input method's composition, shown at the caret.
-	compose         string
-	composeCaret    int
-	composeSelected ui.TextInputRange
-	composing       bool
+	compose          string
+	composeCaret     int
+	composeSelected  ui.TextInputRange
+	composing        bool
+	compositionEnded bool
 	// mode is how the next edit joins the steps of undo, coalesce whether
 	// typing goes on.
 	mode     editMode
