@@ -140,16 +140,77 @@ func (rt *engine) openOverlay(back *node) {
 
 // restoreFocus gives the focus back to the element that had it as an
 // overlay opened, once the overlay is gone with the focus that was in it.
-func (rt *engine) restoreFocus() {
-	for id, opener := range rt.openers {
-		if rt.states[id] != nil {
-			continue
+func (rt *engine) restoreFocus(previousModal uint64) {
+	if len(rt.openers) == 0 {
+		return
+	}
+	live := func(id uint64) bool {
+		s := rt.states[id]
+		return s != nil && s.seen == rt.frame && s.pass == rt.pass
+	}
+	owner := func(id uint64) uint64 {
+		for n := len(rt.states); id != 0 && n > 0; n-- {
+			if _, ok := rt.openers[id]; ok {
+				return id
+			}
+			s := rt.states[id]
+			if s == nil {
+				break
+			}
+			id = s.parent
 		}
-		delete(rt.openers, id)
-		if rt.states[rt.focused] == nil && rt.states[opener] != nil {
-			rt.focused = opener
+		return 0
+	}
+	resolve := func(id uint64) uint64 {
+		for n := len(rt.openers); id != 0 && n >= 0; n-- {
+			if live(id) {
+				if slices.Contains(rt.focusOrder, id) {
+					return id
+				}
+				return 0
+			}
+			o := owner(id)
+			if o == 0 || live(o) {
+				break
+			}
+			id = rt.openers[o]
+		}
+		return 0
+	}
+	// Read every return chain before changing the map or recycling states.
+	type focusReturn struct{ overlay, target uint64 }
+	returns := make([]focusReturn, 0, len(rt.openers))
+	for id, opener := range rt.openers {
+		if !live(opener) {
+			opener = resolve(opener)
+		}
+		returns = append(returns, focusReturn{id, opener})
+	}
+	focused := rt.focused
+	if !live(focused) {
+		focused = 0
+		o := owner(rt.focused)
+		// A press on a modal backdrop can clear the focus before it closes.
+		if rt.focused == 0 {
+			o = owner(previousModal)
+		}
+		if o != 0 && !live(o) {
+			focused = resolve(rt.openers[o])
+			// Future return owners may be outside the current modal; only
+			// an immediate restoration must stay in the remaining one.
+			if rt.modal != 0 && rt.scopeOf(focused) != rt.modal {
+				focused = 0
+			}
 		}
 	}
+	for _, r := range returns {
+		if live(r.overlay) {
+			rt.openers[r.overlay] = r.target
+		} else {
+			delete(rt.openers, r.overlay)
+		}
+	}
+	rt.focused = focused
 }
 
 // insideModal reports whether the elements being built are in the dialog

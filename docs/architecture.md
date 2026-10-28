@@ -2921,8 +2921,12 @@ either.
   above it. Overlays register Escape as overlay shortcuts
   (`OverlayShortcut`), which the keys the focus and the elements around it
   leave reach, the last registered (the overlay on top) first. Each element
-  built at the top of `Overlay` notes the focus as it opens (`openers`),
-  which pruning gives back once it is gone with the focus that was in it.
+  built at the top of `Overlay` notes the focus as it opens (`openers`).
+  After collecting the committed focus order, before `arrangeFocus` and
+  pruning, return targets follow retired overlay owners only, stopping at
+  a live owner. A closing overlay gives focus back to a focusable opener
+  compatible with the remaining modal, without replacing live focus
+  elsewhere.
   An element attached to another (`AttachTo`, which `PopoverBase` and the
   popups of selects and comboboxes use) is that element's popover
   (`Element.popover`, and `state.anchor` once committed): its layout
