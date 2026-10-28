@@ -1,5 +1,18 @@
 # Migrating to checked elements
 
+## Final frame text-input geometry
+
+Full and repaint frames now publish the text-input caret after all `AfterFrame`
+callbacks finish. Custom `HandleTextInput` clients can acquire current
+`CommittedSpace` and `CommittedText` geometry in those callbacks; the final
+caret sent to the platform uses that geometry rather than the element-origin
+fallback queried before it was available. Geometry still expires at the next
+build, and closing a window from a callback prevents further publication.
+
+Non-frame input and client mutations still synchronize text input immediately.
+They can precede layout, so this does not guarantee zero transient fallback or
+qualify GUI or OS-specific IME positioning.
+
 ## Captured pointer cancellation
 
 `Context.CaptureInput` now observes `InputPointerCancel` when an outstanding
