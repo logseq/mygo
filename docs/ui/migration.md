@@ -1,5 +1,42 @@
 # Migrating to checked elements
 
+## Captured pointer cancellation
+
+`Context.CaptureInput` now observes `InputPointerCancel` when an outstanding
+press loses native capture, including a down it prevented or a plain hit with
+no native pointer owner. An observed press also cancels on window blur; an
+owned `HandleCapturedPointer` gesture retains its existing cancellation paths.
+No frame or focus change is required for native capture loss to end a gesture.
+
+Cancellation first clears the old press and click candidate, then notifies
+capture, then the original native handler. Returning true cannot veto the
+native owner's cancellation. Reentrant cancellation or window closure cannot
+revive the old click candidate. A later real up cannot click that candidate;
+a fresh down retains the existing release/click recognition rules. Completed
+gestures do not receive a second cancellation from late capture-loss events.
+
+The cancellation target is the original committed hit, not a new hit under the
+pointer. If that identity has retired, the target is empty: all `Distance`
+queries return -1, but window-level cleanup must still run. Pointer coordinates
+remain in window DIPs. Legacy native handlers keep their existing synthetic
+release cleanup; capture receives cancellation, never that synthetic release.
+
+Handle cancellation before target filtering, discard previews and clear held
+buttons instead of committing them. Do not turn it into a release or a click:
+
+```go
+c.CaptureInput(func(ev ui.InputEvent, target ui.InputTarget) bool {
+    if ev.Kind == ui.InputPointerCancel {
+        cancelPointerGesture()
+        return false
+    }
+    return routeInput(ev, target)
+})
+```
+
+This changes no surface event, focus epoch, composition protocol or wire schema.
+It is a synchronous runtime contract, not a claim of GUI or OS IME acceptance.
+
 ## Window focus lifecycle
 
 `Context.WindowFocusEpoch()` is an additive, UI-thread query of the window's
