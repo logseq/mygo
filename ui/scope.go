@@ -141,6 +141,8 @@ func (rt *engine) openOverlay(back *node) {
 // restoreFocus gives the focus back to the element that had it as an
 // overlay opened, once the overlay is gone with the focus that was in it.
 func (rt *engine) restoreFocus(previousModal uint64) {
+	outside := rt.outsideFocus
+	rt.outsideFocus = rt.outsideFocus[:0]
 	if len(rt.openers) == 0 {
 		return
 	}
@@ -160,6 +162,18 @@ func (rt *engine) restoreFocus(previousModal uint64) {
 			id = s.parent
 		}
 		return 0
+	}
+	onReturnChain := func(id, target uint64) bool {
+		for n := len(rt.openers); id != 0 && n > 0; n-- {
+			if id == target {
+				return true
+			}
+			if live(id) {
+				break
+			}
+			id = owner(rt.openers[id])
+		}
+		return false
 	}
 	resolve := func(id uint64) uint64 {
 		for n := len(rt.openers); id != 0 && n >= 0; n-- {
@@ -190,9 +204,27 @@ func (rt *engine) restoreFocus(previousModal uint64) {
 	if !live(focused) {
 		focused = 0
 		o := owner(rt.focused)
-		// A press on a modal backdrop can clear the focus before it closes.
 		if rt.focused == 0 {
-			o = owner(previousModal)
+			// Outside presses and modal backdrops can clear focus before closing.
+			candidates := append(outside, owner(previousModal))
+			ambiguous := false
+			for i, id := range candidates {
+				if id == 0 || live(id) {
+					continue
+				}
+				for _, other := range candidates[:i] {
+					if other != 0 && !live(other) &&
+						!onReturnChain(id, other) && !onReturnChain(other, id) {
+						ambiguous = true
+					}
+				}
+				if o == 0 || onReturnChain(o, id) {
+					o = id
+				}
+			}
+			if ambiguous {
+				o = 0
+			}
 		}
 		if o != 0 && !live(o) {
 			focused = resolve(rt.openers[o])
@@ -275,6 +307,14 @@ func (e *node) PressedOutside() bool {
 	rt := e.c.rt
 	if rt.pressedWithin(rt.downs[len(rt.downs)-1], e) {
 		return false
+	}
+	for p := e; p != nil; p = p.parent {
+		if _, ok := rt.openers[p.id]; ok {
+			if !slices.Contains(rt.outsideFocus, p.id) {
+				rt.outsideFocus = append(rt.outsideFocus, p.id)
+			}
+			break
+		}
 	}
 	rt.consumed = true
 	return true
