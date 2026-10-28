@@ -14,7 +14,8 @@ func TestCaptureClickOnPlainHit(t *testing.T) {
 		{name: "plain", clicks: 1},
 		{name: "native", native: true, clicks: 1, presses: 1},
 		{name: "prevent native click", native: true, prevent: InputClick, clicks: 1},
-		{name: "prevent down", prevent: InputPointerDown},
+		{name: "prevent down", prevent: InputPointerDown, clicks: 1},
+		{name: "prevent native down", native: true, prevent: InputPointerDown, clicks: 1},
 		{name: "prevent up", prevent: InputPointerUp},
 		{name: "prevent plain click", prevent: InputClick, clicks: 1},
 		{name: "drag and return", action: "drag"},
@@ -24,11 +25,15 @@ func TestCaptureClickOnPlainHit(t *testing.T) {
 		{name: "pointer disabled", action: "pointer"},
 		{name: "capture removed", action: "capture"},
 		{name: "window blur", action: "blur"},
+		{name: "prevent down then drag", prevent: InputPointerDown, action: "drag"},
+		{name: "prevent down then replace", prevent: InputPointerDown, action: "replaced"},
+		{name: "prevent down then blur", prevent: InputPointerDown, action: "blur"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var hit Handle
 			clicks, presses := 0, 0
 			present, capture, enabled, disabled, key := true, true, true, false, "original"
+			var value string
 			tt := NewTester(func(c *Context) {
 				if capture {
 					c.CaptureInput(func(ev InputEvent, target InputTarget) bool {
@@ -41,6 +46,7 @@ func TestCaptureClickOnPlainHit(t *testing.T) {
 						return ev.Kind == tc.prevent
 					})
 				}
+				TextInput(c, &value).Label("Editor").AutoFocus().Absolute().Left(110).Top(30).Size(80, 28)
 				if !present {
 					return
 				}
@@ -76,6 +82,9 @@ func TestCaptureClickOnPlainHit(t *testing.T) {
 			}
 			tt.Frame()
 			tt.Release(50, 14)
+			if tc.prevent == InputPointerDown && tc.action == "" && !tt.Focused("Editor") {
+				t.Fatal("prevented down stole native editor focus")
+			}
 			if clicks != tc.clicks || presses != tc.presses {
 				t.Fatalf("capture clicks/native presses = %d/%d, want %d/%d", clicks, presses, tc.clicks, tc.presses)
 			}
