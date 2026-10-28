@@ -629,7 +629,6 @@ func (rt *engine) runFrame() {
 	rt.text.EndFrame()
 	rt.settleKeys()
 	rt.regs, rt.nextRegs = rt.nextRegs, rt.regs
-	rt.updateTextInput()
 	rt.updateCursor()
 	if rt.access {
 		rt.host.updateAccessibility(rt.accessTree())
@@ -989,6 +988,10 @@ func (rt *engine) endFrame() {
 	}
 	if rt.closing {
 		rt.close()
+		return
+	}
+	if !rt.closed {
+		rt.updateTextInput()
 	}
 }
 
