@@ -34,7 +34,10 @@ type Point struct{ X, Y float32 }
 // A nil replacement range means the current marked range, if present,
 // otherwise the selection. SetMarkedText's selected range is relative to
 // the new marked text. ReplaceText commits and clears preedit; UnmarkText
-// clears marked status, retaining the document's text. Selection is
+// explicitly accepts it. EndComposition removes marking without accepting
+// pending text; CancelComposition restores the text before unconfirmed preedit.
+// Release (focus loss, disposal or client replacement) cancels, not accepts.
+// End and cancel must be idempotent and must not publish pending text. Selection is
 // queried again after every mutation, before the next native event.
 type TextInputClient interface {
 	TextForRange(TextInputRange) (string, TextInputRange)
@@ -42,6 +45,8 @@ type TextInputClient interface {
 	MarkedRange() (TextInputRange, bool)
 	ReplaceText(*TextInputRange, string)
 	SetMarkedText(*TextInputRange, string, TextInputRange)
+	EndComposition()
+	CancelComposition()
 	UnmarkText()
 	BoundsForRange(TextInputRange) (Rect, TextInputRange, bool)
 	IndexForPoint(Point) (int, bool)
@@ -97,9 +102,7 @@ func (a *textInputAdapter) client() (TextInputClient, *state) {
 
 func (a *textInputAdapter) release() {
 	if s := a.rt.states[a.id]; s != nil && s.textAdapter == a && s.textClient != nil {
-		if _, marked := s.textClient.MarkedRange(); marked {
-			s.textClient.UnmarkText()
-		}
+		s.textClient.CancelComposition()
 	}
 }
 func (a *textInputAdapter) TextForRange(r platform.TextRange) (string, platform.TextRange) {
@@ -139,6 +142,12 @@ func (a *textInputAdapter) SetMarkedText(r *platform.TextRange, s string, select
 func (a *textInputAdapter) UnmarkText() {
 	if c, _ := a.client(); c != nil {
 		c.UnmarkText()
+		a.changed()
+	}
+}
+func (a *textInputAdapter) EndComposition() {
+	if c, _ := a.client(); c != nil {
+		c.EndComposition()
 		a.changed()
 	}
 }

@@ -96,7 +96,7 @@ func (v *view) Selection() ui.TextInputSelection {
 }
 
 func (v *view) MarkedRange() (ui.TextInputRange, bool) {
-	if v.compose == "" {
+	if v.compose == "" || v.compositionEnded {
 		return ui.TextInputRange{}, false
 	}
 	start := v.units(v.caret)
@@ -105,6 +105,7 @@ func (v *view) MarkedRange() (ui.TextInputRange, bool) {
 
 func (v *view) ReplaceText(r *ui.TextInputRange, s string) {
 	v.sync()
+	v.compositionEnded = false
 	if v.opts.ReadOnly {
 		return
 	}
@@ -141,6 +142,11 @@ func (v *view) SetMarkedText(r *ui.TextInputRange, s string, selected ui.TextInp
 	if v.opts.ReadOnly {
 		return
 	}
+	if s == "" {
+		v.CancelComposition()
+		return
+	}
+	v.compositionEnded = false
 	if v.compose == "" || r != nil {
 		a, z := v.selection()
 		if r != nil {
@@ -175,11 +181,31 @@ func (v *view) SetMarkedText(r *ui.TextInputRange, s string, selected ui.TextInp
 }
 
 func (v *view) UnmarkText() {
-	transaction := v.composing
 	v.commitCompose()
-	// GTK and IMM32 can end the composition before committing their
-	// replacement, which shares its step of undo.
-	v.composing = transaction
+	v.compositionEnded = false
+	v.publish()
+}
+
+func (v *view) EndComposition() {
+	v.compositionEnded = v.composing
+}
+
+func (v *view) CancelComposition() {
+	v.sync()
+	if !v.composing {
+		return
+	}
+	restore := v.mode == sameStep
+	v.compose, v.composing, v.compositionEnded = "", false, false
+	v.composeCaret, v.composeSelected = 0, ui.TextInputRange{}
+	if restore {
+		v.doc.lock()
+		v.doc.takeBack(false)
+		v.doc.redo = nil
+		v.doc.mu.Unlock()
+		v.sync()
+	}
+	v.mode, v.coalesce = newStep, false
 	v.publish()
 }
 

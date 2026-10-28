@@ -105,6 +105,12 @@ type State struct {
 	// of press and hold, goes to the editor alone. The key after the
 	// first of a chord of Bindings, as Cmd+K Cmd+0, is the chord's.
 	OnInput func(ev ui.InputEvent) bool
+
+	// OnChange runs synchronously after a committed editing operation,
+	// once with its resulting text. IME preedit, selection-only operations
+	// and direct Buffer changes do not call it. Insert and Run are editing
+	// operations; use SetTextFromModel for authoritative model updates.
+	OnChange func(text string)
 	// NoInputMethod turns the system's input methods off while the
 	// editor has the keyboard (ui's InputMethod): keys type the
 	// characters of the keyboard's layout, which come to OnInput as
@@ -197,7 +203,7 @@ func (st *State) options() options {
 		autoClose: !st.NoAutoClose, folding: !st.NoFolding, activeLine: !st.NoActiveLine, cursorShape: st.CursorShape, fitContent: st.FitContent,
 		placeholder: st.Placeholder, label: st.Label, theme: st.Theme, bindings: st.Bindings, gutterMarks: st.GutterMarks,
 		backgrounds: st.LineBackgrounds, diffBase: st.DiffBase, onCompletion: st.OnCompletion, onHover: st.OnHover, onDefinition: st.OnDefinition,
-		onGutterClick: st.OnGutterClick, contextMenu: st.ContextMenu, onInput: st.OnInput, noInputMethod: st.NoInputMethod, minDigits: 3,
+		onGutterClick: st.OnGutterClick, contextMenu: st.ContextMenu, onInput: st.OnInput, onChange: st.OnChange, noInputMethod: st.NoInputMethod, minDigits: 3,
 		renderFindBar: st.RenderFindBar, renderGoToLine: st.RenderGoToLine,
 		renderCompletions: st.RenderCompletions, renderHover: st.RenderHover,
 	}
@@ -259,6 +265,24 @@ func (st *State) SelectedText() string {
 func (st *State) Insert(text string) {
 	st.ensure()
 	st.ed.retry(func() bool { st.ed.paste(text); return true })
+}
+
+// Composing reports whether an input method has uncommitted marked text.
+func (st *State) Composing() bool { return st.ed.markedActive }
+
+// SetTextFromModel replaces authoritative text without calling OnChange.
+// It discards pending composition and, when text differs, undo history.
+// Call it on the UI thread, as other State methods.
+func (st *State) SetTextFromModel(text string) {
+	st.ensure()
+	ed := &st.ed
+	ed.markedActive, ed.marked = false, nil
+	ed.markedEnded, ed.markedBefore, ed.markedSels = false, Snapshot{}, nil
+	ed.changePending, ed.changeBefore = false, Snapshot{}
+	if st.Buffer.String() != lf(text) {
+		st.Buffer.Reset(text)
+		ed.sync()
+	}
 }
 
 // Run runs a command as its key would, and reports whether it did
