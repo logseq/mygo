@@ -197,11 +197,13 @@ type engine struct {
 	// openers are the elements that had the focus as overlays opened, by
 	// overlay; downs the elements the pointer went down on since the last
 	// pass (0 for none), for PressedOutside.
-	openers   map[uint64]uint64
-	downs     []uint64
-	regs      []shortcutReg
-	nextRegs  []shortcutReg
-	delivered []shortcutReg
+	openers map[uint64]uint64
+	// restoreOverlayFocus is linked only by views that open overlays.
+	restoreOverlayFocus func(*engine, uint64)
+	downs               []uint64
+	regs                []shortcutReg
+	nextRegs            []shortcutReg
+	delivered           []shortcutReg
 
 	// trans are the transitions of the elements given one, by ID
 	// (transition.go): exitsBuilt tells that the last frame built elements
@@ -857,9 +859,8 @@ func (rt *engine) prune() {
 			}
 		}
 	}
-	rt.restoreFocus()
 	// The focus does not stay in a page kept out of sight.
-	if s := rt.states[rt.focused]; s != nil && (s.seen != rt.frame || s.pass != rt.pass) {
+	if s := rt.states[rt.focused]; s == nil || s.seen != rt.frame || s.pass != rt.pass {
 		rt.focused = 0
 	}
 }
@@ -998,6 +999,7 @@ func (rt *engine) endFrame() {
 // commit records the laid out frame in the elements' states: their
 // boxes, the hit list in paint order, the focus order.
 func (rt *engine) commit(root *node, w, h float32) {
+	previousModal := rt.modalLayer
 	rt.hits = rt.hits[:0]
 	clear(rt.posed)
 	rt.posed = rt.posed[:0]
@@ -1015,6 +1017,9 @@ func (rt *engine) commit(root *node, w, h float32) {
 	full := Rect{0, 0, w, h}
 	rt.commitElement(root, full, false, true)
 	rt.inkStale = false
+	if rt.restoreOverlayFocus != nil {
+		rt.restoreOverlayFocus(rt, previousModal)
+	}
 	rt.arrangeFocus()
 	rt.noteGroups()
 	rt.committedEpoch = rt.epoch

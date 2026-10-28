@@ -570,6 +570,11 @@ func (e *node) Fit(f Fit) *node { e.fit = f; return e }
 // another element with AttachTo. Each, as it goes with the focus in it,
 // gives the focus back to the element that had it as it came.
 func coreOverlay(c *context, fn func()) {
+	c.rt.restoreOverlayFocus = (*engine).restoreFocus
+	buildOverlay(c, fn)
+}
+
+func buildOverlay(c *context, fn func()) {
 	saved := c.parent
 	o := c.overlayRoot()
 	c.parent = o

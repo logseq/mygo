@@ -103,6 +103,7 @@ func (c *context) ToastAction(message, label string, action func()) {
 // them with ToastViewportBase.
 func (c *context) AddToast(t Toast) string {
 	rt := c.rt
+	rt.restoreOverlayFocus = (*engine).restoreFocus
 	rt.nextToast++
 	if t.ID == "" {
 		t.ID = "toast-" + strconv.FormatUint(rt.nextToast, 10)
@@ -244,7 +245,7 @@ func toastViewport(c *context, keep bool, fn func(viewport *node, toasts []Toast
 	}
 	rt.toastList = list
 	var viewport *node
-	coreOverlay(c, func() {
+	buildOverlay(c, func() {
 		// Keyed, as an element of the engine's own: in the place of the
 		// overlay's first child, it would take the identity, and so the
 		// hover and the focus, of what a dialog that just closed built
