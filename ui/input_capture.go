@@ -42,6 +42,9 @@ func (t InputTarget) Distance(h Handle) int {
 // that omit the registration remove it. The callback must not build UI or run
 // a nested event loop. Inspector-owned input is private to developer tools.
 // Events and pointer coordinates use window DIPs.
+// InputPointerCancel ends an observed press, even when its down was prevented
+// or had no native owner. It cannot be prevented: true does not stop the native
+// owner from cancelling. Its target is the original hit, or empty if retired.
 func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 	if raw := c.build(); raw != nil {
 		rt := raw.rt
@@ -51,6 +54,7 @@ func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 		}
 		if rt.captureClicks == nil {
 			rt.captureClicks = &inputCaptureState{rt: rt}
+			rt.captureClicks.cancel = rt.captureClicks.cancelPointer
 			rt.releaseCapture = rt.captureClicks.release
 		}
 		rt.captureClicks.fn = fn
@@ -61,22 +65,47 @@ func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 // inputCaptureState belongs only to windows that register capture. Plain hits
 // have no native press: track their gesture without making them controls.
 type inputCaptureState struct {
-	rt              *engine
-	fn              func(InputEvent, InputTarget) bool
-	id, born        uint64
-	x, y            float32
-	clicks          int
-	plain, released bool
+	rt                 *engine
+	fn                 func(InputEvent, InputTarget) bool
+	cancel             func()
+	id, born           uint64
+	x, y               float32
+	clicks             int
+	plain, released    bool
+	held               uint8
+	pressID, pressBorn uint64
+	revision           uint64
 }
 
 func (s *inputCaptureState) input(ev InputEvent, target InputTarget) bool {
+	switch ev.Kind {
+	case InputPointerDown:
+		s.revision++
+		button := uint8(1) << uint(ev.Button)
+		if s.held == 0 || s.held&button != 0 {
+			s.pressID, s.pressBorn = target.id, 0
+			if hit := s.rt.states[target.id]; hit != nil {
+				s.pressBorn = hit.born
+			}
+		}
+		s.held |= button
+	case InputPointerUp:
+		s.held &^= uint8(1) << uint(ev.Button)
+	}
 	if ev.Kind == InputPointerMove && s.id != 0 {
 		dx, dy := ev.X-s.x, ev.Y-s.y
 		if dx*dx+dy*dy >= dragStart*dragStart {
 			s.id = 0
 		}
 	}
+	revision := s.revision
 	prevented := s.fn(ev, target)
+	switch ev.Kind {
+	case InputPointerDown, InputPointerUp, InputClick:
+		if revision != s.revision || s.rt.closed || s.rt.closing || s.rt.captureClicks != s {
+			return true
+		}
+	}
 	switch ev.Kind {
 	case InputPointerDown:
 		if ev.Button == 0 {
@@ -99,6 +128,37 @@ func (s *inputCaptureState) input(ev InputEvent, target InputTarget) bool {
 		s.id = 0
 	}
 	return prevented
+}
+
+func (rt *engine) cancelCapturePointer() {
+	if s := rt.captureClicks; s != nil {
+		s.cancel()
+	}
+}
+
+// cancelPointer disarms the gesture before notifying capture. The click
+// candidate alone cannot identify a press: movement and prevention clear it.
+func (s *inputCaptureState) cancelPointer() {
+	rt := s.rt
+	held, id := s.held, s.pressID
+	if hit := rt.states[id]; hit == nil || hit.born != s.pressBorn || hit.seen != rt.frame || hit.pass != rt.pass {
+		id = 0
+	}
+	s.revision++
+	s.held, s.pressID, s.pressBorn = 0, 0, 0
+	s.id, s.plain, s.released = 0, false, false
+	if held == 0 {
+		return
+	}
+	button := 0
+	if held&1 == 0 {
+		button = 1
+		if held&2 == 0 {
+			button = 2
+		}
+	}
+	// Cancellation is a fact, not a preventable default action.
+	rt.captureInput(InputEvent{Kind: InputPointerCancel, Button: button, Mods: rt.mods, X: rt.pointerX, Y: rt.pointerY}, id)
 }
 
 func (s *inputCaptureState) release(button int) {
@@ -129,8 +189,9 @@ func (rt *engine) captureInput(ev InputEvent, id uint64) bool {
 		return false
 	}
 	rt.captureSerial++
+	previous := rt.capturing
 	rt.capturing = rt.captureSerial
-	defer func() { rt.capturing = 0 }()
+	defer func() { rt.capturing = previous }()
 	ev.Time = rt.frameTime()
 	return rt.inputCapture(ev, InputTarget{owner: rt.owner, id: id, serial: rt.capturing})
 }

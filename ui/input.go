@@ -107,6 +107,8 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		}
 		if rt.pressed != nil && rt.pressed.capturedPointer {
 			rt.pointerCancel()
+		} else {
+			rt.cancelCapturePointer()
 		}
 		rt.windowFocused = false
 		if rt.captureClicks != nil {
@@ -434,22 +436,29 @@ func (rt *engine) endDown() {
 
 func (rt *engine) pointerCancel() {
 	p := rt.pressed
-	if p == nil {
-		return
+	ev := InputEvent{Kind: InputPointerCancel, Button: rt.pressButton, Mods: rt.mods, Time: rt.now()}
+	var handler func(InputEvent) bool
+	if p != nil {
+		handler = p.input
+		ev.X, ev.Y = p.local(rt.pointerX, rt.pointerY)
+		if !p.capturedPointer {
+			// Legacy handlers ended their gesture on a synthetic release.
+			ev.Kind = InputPointerUp
+		}
+		p.pressed, p.pressPending, p.released, p.capturedPointer = false, false, false, false
 	}
-	owned := p.capturedPointer
 	rt.pressed = nil
 	rt.pressDragger = 0
 	rt.downs = rt.downs[:0]
-	rt.captureClicks, rt.releaseCapture = nil, nil
-	p.pressed, p.pressPending, p.released, p.capturedPointer = false, false, false, false
-	if owned {
-		rt.deliver(p, InputEvent{Kind: InputPointerCancel, Button: rt.pressButton, Mods: rt.mods})
-	} else {
-		// Legacy handlers ended their gesture on a synthetic release.
-		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: rt.pressButton, Mods: rt.mods})
+	rt.cancelCapturePointer()
+	// Capture may close the window or retire the owner. Notify the original
+	// handler once, without looking up a replacement or allowing a veto.
+	if handler != nil {
+		handler(ev)
 	}
-	rt.requestFrame()
+	if p != nil && !rt.closed && !rt.closing {
+		rt.requestFrame()
+	}
 }
 
 // countPress counts the backend's n-th quick press from the first on the
@@ -488,7 +497,9 @@ func (rt *engine) pointerUp(button, clicks int) {
 		rt.scrollDrag.st = nil
 		rt.selection.dragging = false
 		rt.dragCancel()
-		rt.requestFrame()
+		if !rt.closed && !rt.closing {
+			rt.requestFrame()
+		}
 		return
 	}
 	if rt.scrollDrag.st != nil {
