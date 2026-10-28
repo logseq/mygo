@@ -9,6 +9,14 @@ and blurred. Duplicate notifications do not advance it. A blur/refocus round
 trip therefore changes the revision even if no render occurs. Nil contexts
 and closed windows return zero.
 
+The private frame builder and its Elements remain valid only during a view
+build. This read-only query uses the stable public `Context` described in
+`ui/frame.go`; it does not extend any frame-owned lifetime. For capture-time
+checks, query the public context used to register the currently installed
+`CaptureInput` callback, inside that callback. Keep only the revision value
+as session ownership, not a render-time revision snapshot or an old callback's
+frame data. `CaptureInput` supplies an event and target, not a new context.
+
 Applications retaining input-session ownership must capture this revision
 when a session begins and compare it at event dispatch, alongside their
 retained client identity and `Handle.Focused(c)`. Do not cache the revision

@@ -11,10 +11,10 @@ import (
 	"github.com/egoist/mygo/transfer"
 )
 
-// Context builds a window's user interface for one frame. The window's
-// view function receives it on the main thread; it is only valid during
-// that call. A frame may rebuild the view in several passes; neither a
-// Context nor its Elements may be saved for a later call.
+// context is the frame-scoped builder behind the public Context. The window's
+// view uses it on the main thread, only for that call. Neither its frame data
+// nor Elements may be retained. Explicitly documented UI-thread queries on
+// the public Context, such as WindowFocusEpoch, have their own lifetime.
 type context struct {
 	rt     *engine
 	parent *node
@@ -76,6 +76,8 @@ type context struct {
 // blur notifications do not advance it. It does not track control focus.
 // Compare revisions only within the same Context, on the UI thread. This query
 // is valid between builds, including CaptureInput; it does not request a frame.
+// In CaptureInput, query the Context that registered the current callback,
+// not a revision cached during a view build.
 // A nil context or a closed window returns zero.
 func (c *Context) WindowFocusEpoch() uint64 {
 	if rt := c.runtime(); rt != nil {
