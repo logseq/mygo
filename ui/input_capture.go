@@ -54,6 +54,7 @@ func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 		}
 		if rt.captureClicks == nil {
 			rt.captureClicks = &inputCaptureState{rt: rt}
+			rt.captureClicks.cancel = rt.captureClicks.cancelPointer
 			rt.releaseCapture = rt.captureClicks.release
 		}
 		rt.captureClicks.fn = fn
@@ -66,6 +67,7 @@ func (c *Context) CaptureInput(fn func(InputEvent, InputTarget) bool) {
 type inputCaptureState struct {
 	rt                 *engine
 	fn                 func(InputEvent, InputTarget) bool
+	cancel             func()
 	id, born           uint64
 	x, y               float32
 	clicks             int
@@ -128,13 +130,16 @@ func (s *inputCaptureState) input(ev InputEvent, target InputTarget) bool {
 	return prevented
 }
 
-// cancelCapturePointer disarms the gesture before notifying capture. The click
-// candidate alone cannot identify a press: movement and prevention clear it.
 func (rt *engine) cancelCapturePointer() {
-	s := rt.captureClicks
-	if s == nil {
-		return
+	if s := rt.captureClicks; s != nil {
+		s.cancel()
 	}
+}
+
+// cancelPointer disarms the gesture before notifying capture. The click
+// candidate alone cannot identify a press: movement and prevention clear it.
+func (s *inputCaptureState) cancelPointer() {
+	rt := s.rt
 	held, id := s.held, s.pressID
 	if hit := rt.states[id]; hit == nil || hit.born != s.pressBorn || hit.seen != rt.frame || hit.pass != rt.pass {
 		id = 0
