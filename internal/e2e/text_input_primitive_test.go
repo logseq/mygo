@@ -14,6 +14,10 @@ type nativeInputClient struct {
 	text      string
 	selection ui.TextInputSelection
 	mark      *ui.TextInputRange
+	before    string
+	beforeSel ui.TextInputSelection
+	composing bool
+	ended     bool
 }
 
 func (c *nativeInputClient) TextForRange(r ui.TextInputRange) (string, ui.TextInputRange) {
@@ -22,7 +26,7 @@ func (c *nativeInputClient) TextForRange(r ui.TextInputRange) (string, ui.TextIn
 }
 func (c *nativeInputClient) Selection() ui.TextInputSelection { return c.selection }
 func (c *nativeInputClient) MarkedRange() (ui.TextInputRange, bool) {
-	if c.mark != nil {
+	if c.mark != nil && !c.ended {
 		return *c.mark, true
 	}
 	return ui.TextInputRange{}, false
@@ -43,15 +47,28 @@ func (c *nativeInputClient) ReplaceText(r *ui.TextInputRange, s string) {
 	end := wanted.Start + ui.UTF16Len(s)
 	c.selection = ui.TextInputSelection{Range: ui.TextInputRange{Start: end, End: end}}
 	c.mark = nil
+	c.composing, c.ended = false, false
 }
 func (c *nativeInputClient) SetMarkedText(r *ui.TextInputRange, s string, selected ui.TextInputRange) {
+	before, selection := c.before, c.beforeSel
+	if !c.composing {
+		before, selection = c.text, c.selection
+	}
 	wanted := c.target(r)
 	c.ReplaceText(&wanted, s)
 	mark := ui.TextInputRange{Start: wanted.Start, End: wanted.Start + ui.UTF16Len(s)}
 	c.mark = &mark
+	c.before, c.beforeSel, c.composing = before, selection, true
 	c.selection = ui.TextInputSelection{Range: ui.TextInputRange{Start: mark.Start + selected.Start, End: mark.Start + selected.End}}
 }
-func (c *nativeInputClient) UnmarkText() { c.mark = nil }
+func (c *nativeInputClient) UnmarkText()     { c.mark, c.composing, c.ended = nil, false, false }
+func (c *nativeInputClient) EndComposition() { c.ended = c.composing }
+func (c *nativeInputClient) CancelComposition() {
+	if c.composing {
+		c.text, c.selection = c.before, c.beforeSel
+	}
+	c.UnmarkText()
+}
 func (c *nativeInputClient) BoundsForRange(r ui.TextInputRange) (ui.Rect, ui.TextInputRange, bool) {
 	return ui.Rect{X: float32(r.Start)*8 + 8, Y: 8, W: 1, H: 20}, r, true
 }

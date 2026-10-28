@@ -15,6 +15,10 @@ type field struct {
 	selection ui.TextInputSelection
 	marked    *ui.TextInputRange
 	layout    *ui.TextLayout
+	before    string
+	beforeSel ui.TextInputSelection
+	composing bool
+	ended     bool
 }
 
 func (f *field) shape() { f.layout = ui.ShapeText(f.text, ui.Font{Size: 18}, 0) }
@@ -24,7 +28,7 @@ func (f *field) TextForRange(r ui.TextInputRange) (string, ui.TextInputRange) {
 }
 func (f *field) Selection() ui.TextInputSelection { return f.selection }
 func (f *field) MarkedRange() (ui.TextInputRange, bool) {
-	if f.marked != nil {
+	if f.marked != nil && !f.ended {
 		return *f.marked, true
 	}
 	return ui.TextInputRange{}, false
@@ -45,16 +49,30 @@ func (f *field) ReplaceText(r *ui.TextInputRange, text string) {
 	end := wanted.Start + ui.UTF16Len(text)
 	f.selection = ui.TextInputSelection{Range: ui.TextInputRange{Start: end, End: end}}
 	f.marked = nil
+	f.composing, f.ended = false, false
 	f.shape()
 }
 func (f *field) SetMarkedText(r *ui.TextInputRange, text string, selected ui.TextInputRange) {
+	before, selection := f.before, f.beforeSel
+	if !f.composing {
+		before, selection = f.text, f.selection
+	}
 	wanted := f.target(r)
 	f.ReplaceText(&wanted, text)
 	mark := ui.TextInputRange{Start: wanted.Start, End: wanted.Start + ui.UTF16Len(text)}
 	f.marked = &mark
+	f.before, f.beforeSel, f.composing = before, selection, true
 	f.selection = ui.TextInputSelection{Range: ui.TextInputRange{Start: mark.Start + selected.Start, End: mark.Start + selected.End}}
 }
-func (f *field) UnmarkText() { f.marked = nil }
+func (f *field) UnmarkText()     { f.marked, f.composing, f.ended = nil, false, false }
+func (f *field) EndComposition() { f.ended = f.composing }
+func (f *field) CancelComposition() {
+	if f.composing {
+		f.text, f.selection = f.before, f.beforeSel
+		f.shape()
+	}
+	f.UnmarkText()
+}
 func (f *field) BoundsForRange(r ui.TextInputRange) (ui.Rect, ui.TextInputRange, bool) {
 	b := f.layout.Caret(r.Start)
 	if r.Start != r.End {
