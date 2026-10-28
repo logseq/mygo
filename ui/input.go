@@ -95,10 +95,16 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.SurfaceCommand:
 		rt.editEvent(editEvent{kind: editCommand, text: ev.Text})
 	case platform.SurfaceFocus:
+		if !rt.windowFocused {
+			rt.windowFocusEpoch++
+		}
 		rt.windowFocused = true
 		rt.blinkStart = rt.now()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
+		if rt.windowFocused {
+			rt.windowFocusEpoch++
+		}
 		if rt.pressed != nil && rt.pressed.capturedPointer {
 			rt.pointerCancel()
 		}

@@ -1,5 +1,44 @@
 # Migrating to checked elements
 
+## Window focus lifecycle
+
+`Context.WindowFocusEpoch()` is an additive, UI-thread query of the window's
+focus lifecycle, valid between builds and inside `CaptureInput`. Its nonzero
+revision advances immediately when the real surface changes between focused
+and blurred. Duplicate notifications do not advance it. A blur/refocus round
+trip therefore changes the revision even if no render occurs. Nil contexts
+and closed windows return zero.
+
+The private frame builder and its Elements remain valid only during a view
+build. This read-only query uses the stable public `Context` described in
+`ui/frame.go`; it does not extend any frame-owned lifetime. For capture-time
+checks, query the public context used to register the currently installed
+`CaptureInput` callback, inside that callback. Keep only the revision value
+as session ownership, not a render-time revision snapshot or an old callback's
+frame data. `CaptureInput` supplies an event and target, not a new context.
+
+Applications retaining input-session ownership must capture this revision
+when a session begins and compare it at event dispatch, alongside their
+retained client identity and `Handle.Focused(c)`. Do not cache the revision
+only during render: that misses a new session beginning before the next frame.
+
+```go
+// On the UI thread, inside the window's capture callback:
+if owner.client != currentClient || owner.epoch != c.WindowFocusEpoch() || !handle.Focused(c) {
+    clearOwner()
+}
+if startsSession && handle.Focused(c) {
+    owner.client = currentClient
+    owner.epoch = c.WindowFocusEpoch()
+}
+```
+
+Revisions are scoped to one window/context, not globally unique client IDs.
+They do not replace retained-node identity checks or track movement between
+controls in a focused window. No event fields, input-consumption behavior,
+composition phases, timers or render barriers change. This is a native-event
+lifecycle contract, not a claim of real OS IME acceptance.
+
 ## Code editor committed changes
 
 `editor.State.OnChange func(text string)` now reports each completed editing
