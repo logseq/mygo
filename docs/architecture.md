@@ -2926,7 +2926,10 @@ either.
   pruning, return targets follow retired overlay owners only, stopping at
   a live owner. A closing overlay gives focus back to a focusable opener
   compatible with the remaining modal, without replacing live focus
-  elsewhere.
+  elsewhere. Outside presses record their overlay owners until the final
+  commit, across rebuild passes. Only retired owners on one return chain
+  can restore cleared focus; a query without closure restores nothing.
+  The frame consumes these candidates, including on an early exit.
   An element attached to another (`AttachTo`, which `PopoverBase` and the
   popups of selects and comboboxes use) is that element's popover
   (`Element.popover`, and `state.anchor` once committed): its layout

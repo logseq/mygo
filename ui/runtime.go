@@ -198,6 +198,8 @@ type engine struct {
 	// overlay; downs the elements the pointer went down on since the last
 	// pass (0 for none), for PressedOutside.
 	openers map[uint64]uint64
+	// outsideFocus records overlay owners reported by PressedOutside this frame.
+	outsideFocus []uint64
 	// restoreOverlayFocus is linked only by views that open overlays.
 	restoreOverlayFocus func(*engine, uint64)
 	downs               []uint64
@@ -979,6 +981,7 @@ func (rt *engine) close() {
 // endFrame ends a frame, and closes the engine when its window closed
 // during it.
 func (rt *engine) endFrame() {
+	rt.outsideFocus = rt.outsideFocus[:0]
 	rt.inFrame = false
 	callbacks := rt.afterFrame
 	rt.afterFrame = nil
