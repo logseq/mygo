@@ -56,6 +56,10 @@ const (
 	// qualifies as a click, including on a plain hit with no native gesture.
 	// Returning true suppresses any native activation.
 	InputClick
+	// InputPointerCancel ends an owned pointer gesture without a release or click.
+	// HandleCapturedPointer receives it on Escape, deactivation, capture loss,
+	// removal or window close. It must discard, not commit, its preview.
+	InputPointerCancel
 )
 
 // InputEvent is input an element takes as it comes (HandleInput).
@@ -107,6 +111,25 @@ type InputEvent struct {
 // instead (Clicked, Shortcut, Dragged).
 func (e *node) HandleInput(fn func(ev InputEvent) bool) *node {
 	e.inputFn = fn
+	return e
+}
+
+// HandleCapturedPointer is HandleInput with explicit cancellation of primary
+// pointer gestures. A primary down it accepts owns movement and release outside
+// the element. Cancellation never activates a click or a context menu. Other
+// input handlers retain their existing deactivation behavior.
+func (e *node) HandleCapturedPointer(fn func(ev InputEvent) bool) *node {
+	s := e.st
+	e.inputFn = func(ev InputEvent) bool {
+		if ev.Kind == InputPointerUp || ev.Kind == InputPointerCancel {
+			s.capturedPointer = false
+		}
+		handled := fn(ev)
+		if ev.Kind == InputPointerDown && ev.Button == 0 && handled {
+			s.capturedPointer = true
+		}
+		return handled
+	}
 	return e
 }
 

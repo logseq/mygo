@@ -1959,6 +1959,16 @@ Recent (about 290 KB).
 
 ## Native UI (`ui`)
 
+`Element.HandleCapturedPointer` opts a primary pointer handler into an owned
+gesture. An accepted down receives movement and release outside the element;
+Escape, window deactivation, native capture loss, removal, disablement and close
+end it with `InputPointerCancel`, never a successful release or click. Discard
+transient state on cancellation and commit it only on `InputPointerUp`.
+`HandleInput` retains its legacy synthetic release on window deactivation;
+existing text and IME handlers do not opt into this contract. Install one input
+handler per element. Surface backends report capture loss as `PointerCancel`;
+Windows sends a real release before relinquishing its own native capture.
+
 The public API keeps one stable `*Context` per window. Child builders share
 it and temporarily change its parent. `Element` is a 16-byte checked value:
 a direct owner record, arena slot and 32-bit generation. The owner detaches

@@ -175,7 +175,10 @@ func (s *surface) listen() {
 	})
 	s.on(c, "pointercancel", true, func(e js.Value) {
 		x, y := s.point(e)
-		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(e.Get("button").Int()), Mods: s.mods(e)})
+		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel, X: x, Y: y, Mods: s.mods(e)})
+	})
+	s.on(c, "lostpointercapture", false, func(e js.Value) {
+		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
 	})
 	s.on(c, "pointerleave", true, func(js.Value) {
 		s.send(platform.SurfaceEvent{Kind: platform.PointerLeave})

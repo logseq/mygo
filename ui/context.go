@@ -547,9 +547,10 @@ type state struct {
 	typing  bool
 	// press is where the pointer went down in the element; dragX and dragY
 	// add up its moves since the last frame.
-	pressX, pressY float32
-	dragX, dragY   float32
-	pressed        bool
+	pressX, pressY  float32
+	dragX, dragY    float32
+	pressed         bool
+	capturedPointer bool
 	// drag follows the press's moves; released tells that it ended since
 	// the last frame, going at releaseVX and releaseVY in the element's
 	// axes, releaseWX and releaseWY in the window's.

@@ -835,6 +835,9 @@ func (rt *engine) prune() {
 				rt.captureClicks.id = 0
 			}
 			if rt.pressed == s {
+				if s.capturedPointer {
+					rt.pointerCancel()
+				}
 				rt.pressed = nil
 			}
 			if !rt.keptAlive(s) {
@@ -922,6 +925,9 @@ func (rt *engine) armTimer() {
 // frame ends: the rest of the view builds with a Context that still works,
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
+	if rt.pressed != nil && rt.pressed.capturedPointer {
+		rt.pointerCancel()
+	}
 	rt.inputCapture = nil
 	rt.captureClicks, rt.releaseCapture = nil, nil
 	if rt.inFrame {
@@ -1059,6 +1065,9 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 	s.webView = e.webView
 	s.role = e.role
 	s.input, s.caret, s.takesText, s.noIME = e.inputFn, e.caret, e.takesText, e.noIME
+	if rt.pressed == s && s.capturedPointer && s.flags&flagDisabled != 0 {
+		rt.pointerCancel()
+	}
 	s.copyData = e.copyData
 	if s.textClient != e.textClient {
 		if s.textAdapter != nil {
@@ -1085,6 +1094,9 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 	// the focus, and has no text to find; so does what is inert, which
 	// shows.
 	invisible := e.flags&(flagInvisible|flagInert) != 0 || hidden || e.backface && e.transform.facesAway()
+	if invisible && rt.pressed == s && s.capturedPointer {
+		rt.pointerCancel()
+	}
 	if invisible {
 		s.vw, s.vh = 0, 0
 		if rt.focused == e.id {
