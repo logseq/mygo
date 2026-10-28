@@ -70,6 +70,20 @@ type context struct {
 	depthStarts []int
 }
 
+// WindowFocusEpoch returns the window's current focus lifecycle revision.
+// It starts at one and advances synchronously on each change between focused
+// and blurred, even when no view is built between events. Duplicate focus or
+// blur notifications do not advance it. It does not track control focus.
+// Compare revisions only within the same Context, on the UI thread. This query
+// is valid between builds, including CaptureInput; it does not request a frame.
+// A nil context or a closed window returns zero.
+func (c *Context) WindowFocusEpoch() uint64 {
+	if rt := c.runtime(); rt != nil {
+		return rt.windowFocusEpoch
+	}
+	return 0
+}
+
 const chunkSize = 32
 
 // alloc returns a zeroed element from the frame's arena.

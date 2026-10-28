@@ -292,6 +292,7 @@ type engine struct {
 	// windowFocus reads; focusRead, that the last frame read it, so that a
 	// change of it draws a frame.
 	windowFocused, focusRead bool
+	windowFocusEpoch         uint64
 	// toasts are the toasts the window holds, oldest first, and
 	// toastList those showing, as ToastViewportBase gives them; their time
 	// stops while toastsPaused. A viewport of them was built in the pass
@@ -451,7 +452,7 @@ type keyEvent struct {
 }
 
 func newRuntime(view func(*context), h host) *engine {
-	rt := &engine{view: view, host: h, text: textSystem(), states: map[uint64]*state{}, windowFocused: true}
+	rt := &engine{view: view, host: h, text: textSystem(), states: map[uint64]*state{}, windowFocused: true, windowFocusEpoch: 1}
 	rt.c.rt = rt
 	rt.owner = weak.Make(rt)
 	rt.arena = &elementOwner{rt: rt}
