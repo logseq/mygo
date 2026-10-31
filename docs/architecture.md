@@ -3319,6 +3319,11 @@ either.
   stands for the family of GTK's `gtk-font-name` first
   (`platform.Theme.UIFont`, which package ui gives `SetUIFamily` with each
   change of the appearance).
+  Linux text needs Pango 1.48 or later. Its fontmap substitution hook
+  removes fontconfig's global `color=true` preference, which can otherwise
+  put an emoji fallback ahead of the requested text faces for bare digits.
+  Pango still itemizes emoji with the `emoji` family, preserving color
+  glyphs and variation, keycap, ZWJ and flag sequences.
 - **Atlas lifetime.** A mask drawn for the first time goes to the
   transient zone at the bottom of the atlas, which the next frame frees,
   and moves to the lasting zone at the top once another frame draws it, so

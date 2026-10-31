@@ -177,6 +177,7 @@ var pangoLib struct {
 	languageFromString        func(tag string) uintptr
 	languageGetDefault        func() uintptr
 	fontMapConfigChanged      func(fontMap uintptr)
+	fontMapSetSubstitute      func(fontMap, callback, data, notify uintptr)
 	cairoFontOptionsCreate    func() uintptr
 	cairoFontOptionsDestroy   func(options uintptr)
 	cairoFontOptionsAntialias func(options uintptr, antialias int32)
@@ -207,6 +208,7 @@ var pangoLib struct {
 	fcConfigGetFonts          func(config uintptr, set int32) *fcFontSet
 	fcConfigParseFromMemory   func(config uintptr, xml string, complain int32) int32
 	fcPatternGetString        func(pattern uintptr, object string, n int32, out **byte) int32
+	fcPatternGetBool          func(pattern uintptr, object string, n int32, out *int32) int32
 	fcPatternCreate           func() uintptr
 	fcPatternDuplicate        func(pattern uintptr) uintptr
 	fcPatternDel              func(pattern uintptr, object string) int32
@@ -219,6 +221,17 @@ var pangoLib struct {
 	fcDefaultSubstitute       func(pattern uintptr)
 	fcFontMatch               func(config, pattern uintptr, result *int32) uintptr
 }
+
+var pangoSubstitute = purego.NewCallback(func(pattern, _ uintptr) uintptr {
+	// Fontconfig can turn an emoji fallback into a global color preference,
+	// ahead of the requested text families. Pango already itemizes emoji
+	// with the "emoji" family; keep color from overriding family order.
+	var color int32
+	if pangoLib.fcPatternGetBool(pattern, "color", 0, &color) == fcResultMatch && color == int32(gTrue) {
+		pangoLib.fcPatternDel(pattern, "color")
+	}
+	return 0
+})
 
 func loadPango() error {
 	open := func(names ...string) (uintptr, error) {
@@ -350,6 +363,8 @@ func loadPango() error {
 	bind(cairo, &l.cairoSetScaledFont, "cairo_set_scaled_font")
 	bind(cairo, &l.cairoSetSourceRGBA, "cairo_set_source_rgba")
 	bind(cairo, &l.cairoShowGlyphs, "cairo_show_glyphs")
+	bind(ft, &l.fontMapSetSubstitute, "pango_fc_font_map_set_default_substitute") // Pango 1.48
+	bind(fc, &l.fcPatternGetBool, "FcPatternGetBool")
 	if len(missing) > 0 {
 		return fmt.Errorf("Pango or cairo lacks %s", strings.Join(missing, ", "))
 	}
@@ -474,6 +489,7 @@ func newPango() (*pangoEngine, error) {
 	if e.fontMap == 0 {
 		return nil, errors.New("pango_cairo_font_map_new failed")
 	}
+	l.fontMapSetSubstitute(e.fontMap, pangoSubstitute, 0, 0)
 	e.context = l.fontMapCreateContext(e.fontMap)
 	// Until the app has the desktop's settings, GDK's defaults on X11
 	// without a settings daemon: grayscale antialiasing, medium hinting.
