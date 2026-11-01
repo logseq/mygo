@@ -282,9 +282,18 @@ func TestBackgroundFollowsTheme(t *testing.T) {
 }
 
 func TestCloseCanBePrevented(t *testing.T) {
-	w, fw := testWindow(t, WindowOptions{})
+	w, fw, _ := contentWindow(t, func(*ui.Context) {})
 	var allow atomic.Bool
 	var closed atomic.Int32
+	var retired atomic.Int32
+	onMain(func() {
+		w.conn.RetireImages = func() {
+			if fw.IsClosed() || w.IsDestroyed() {
+				t.Error("native window destroyed before image retirement")
+			}
+			retired.Add(1)
+		}
+	})
 	w.OnClose(func(e *CloseEvent) {
 		if e.Window != w {
 			t.Error("wrong window in CloseEvent")
@@ -302,8 +311,16 @@ func TestCloseCanBePrevented(t *testing.T) {
 	if onMainValue(fw.UserClose) {
 		t.Fatal("user close was not prevented")
 	}
+	if retired.Load() != 0 {
+		t.Fatal("cancelled close retired image owners")
+	}
 	allow.Store(true)
-	w.Close()
+	if !onMainValue(fw.UserClose) {
+		t.Fatal("allowed user close was prevented")
+	}
+	if retired.Load() != 1 {
+		t.Fatal("user close did not retire image owners before destruction")
+	}
 	if !w.IsDestroyed() || !fw.IsClosed() || closed.Load() != 1 {
 		t.Fatalf("window not closed: destroyed=%v closed=%v events=%d", w.IsDestroyed(), fw.IsClosed(), closed.Load())
 	}
