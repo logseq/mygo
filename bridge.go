@@ -177,10 +177,11 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 	// Both the cancellation and the page may answer; the first one counts
 	// and the other must not block.
 	ch := make(chan result, 2)
+	canceled := evalCanceled
 	stop := context.AfterFunc(ctx, func() {
 		deliver(ch, result{err: ctx.Err()})
-		if evalCanceled != nil {
-			evalCanceled()
+		if canceled != nil {
+			canceled()
 		}
 	})
 	defer stop()
