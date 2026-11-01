@@ -27,7 +27,7 @@ func (r *Renderer) RetireImage(id uint64) error {
 		t.ver = 0
 	}
 	var err error
-	if currentContext() != r.context || !hasContext() {
+	if r.context == 0 || currentContext() != r.context || !hasContext() {
 		err = fmt.Errorf("gl: owned image retirement has no matching context")
 	} else {
 		// Images can also have been read by an effect's image units.
