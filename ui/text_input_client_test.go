@@ -17,6 +17,7 @@ type primitiveClient struct {
 	before           string
 	beforeSelection  TextInputSelection
 	composing        bool
+	layoutPending    bool
 }
 
 func (c *primitiveClient) TextForRange(r TextInputRange) (string, TextInputRange) {
@@ -81,6 +82,9 @@ func (c *primitiveClient) UnmarkText() {
 	c.unmarks++
 }
 func (c *primitiveClient) BoundsForRange(r TextInputRange) (Rect, TextInputRange, bool) {
+	if c.layoutPending {
+		return Rect{}, TextInputRange{}, false
+	}
 	return Rect{float32(r.Start) * 4, 5, max(1, float32(r.End-r.Start)*4), 20}, r, true
 }
 func (c *primitiveClient) IndexForPoint(p Point) (int, bool) {
@@ -209,6 +213,38 @@ func TestTextInputClientQueriesGeometryAndLifetime(t *testing.T) {
 	client.ReplaceText(nil, "removed")
 	if c.changes != before {
 		t.Fatal("disposed client mutated")
+	}
+}
+
+func TestTextInputClientCaretWaitsForCommittedGeometry(t *testing.T) {
+	c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+	current := c
+	tt := coreNewTester(func(ctx *context) {
+		coreBox(ctx).Size(200, 50).HandleTextInput(current).AutoFocus()
+	}, 250, 60)
+	defer tt.rt.close()
+	measured := tt.h.ime.Caret
+	if measured != (platform.RectF{X: 12, Y: 5, W: 1, H: 20}) || !tt.h.ime.CaretCurrent {
+		t.Fatal("initial measured caret", measured)
+	}
+	c.layoutPending = true
+	tt.h.ime.Client.SetMarkedText(nil, "ni", TextInputRange{Start: 2, End: 2})
+	if tt.h.ime.Caret != measured {
+		t.Fatal("pending layout replaced measured caret", tt.h.ime.Caret)
+	}
+	if tt.h.ime.CaretCurrent {
+		t.Fatal("pending geometry reported current")
+	}
+	c.selection = TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}
+	c.layoutPending = false
+	tt.Frame()
+	if tt.h.ime.Caret != measured || !tt.h.ime.CaretCurrent {
+		t.Fatal("same-rectangle geometry recovery not published", tt.h.ime)
+	}
+	current = &primitiveClient{layoutPending: true}
+	tt.Frame()
+	if tt.h.ime.Caret != (platform.RectF{}) {
+		t.Fatal("replacement client inherited previous geometry", tt.h.ime.Caret)
 	}
 }
 

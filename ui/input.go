@@ -1117,9 +1117,11 @@ func (rt *engine) updateTextInput() {
 		caret := sel.Caret()
 		if bounds, _, ok := s.textAdapter.BoundsForRange(TextInputRange{Start: caret, End: caret}); ok {
 			t.Caret = bounds
-		} else {
-			r := transformRect(s.world, Rect{X: s.x, Y: s.y, W: 1, H: s.h})
-			t.Caret = platform.RectF{X: float64(r.X), Y: float64(r.Y), W: float64(r.W), H: float64(r.H)}
+			t.CaretCurrent = true
+		} else if t.Client == rt.ime.state.Client {
+			// Model edits can precede layout. Keep only this client's last
+			// measured caret until the next committed frame supplies geometry.
+			t.Caret = rt.ime.state.Caret
 		}
 	} else if s != nil && s.editor == nil && s.input != nil && s.takesText && rt.windowFocus() {
 		// An element taking text itself: no text around the caret.
