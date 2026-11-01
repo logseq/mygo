@@ -10,7 +10,7 @@ func TestRichText(t *testing.T) {
 	tt := coreNewTester(func(c *context) {
 		coreColumn(c).Padding(10).Gap(10).AlignItems(Start).Children(func() {
 			coreRichText(c, Span{Text: "plain "}, Span{Text: "RED", Color: red, Size: 30, Weight: 700}).Label("rich")
-			coreRichText(c, Span{Text: "under", Underline: true, Color: blue}, Span{Text: " over"}).Label("lined")
+			coreRichText(c, Span{Text: "under", Underline: true, Color: blue, DecorationThickness: 1}, Span{Text: " over"}).Label("lined")
 			coreText(c, "plain RED").Label("text")
 		})
 	}, 400, 200)

@@ -1,13 +1,40 @@
 # LUI compatibility branch
 
-This branch starts at upstream MyGo v0.6.4, commit
-`6255ea40139d06e0762a7c4a32626148ba410478`, and retains the complete upstream
+This branch started at upstream MyGo v0.6.4, commit
+`6255ea40139d06e0762a7c4a32626148ba410478`, and merges the official v0.7.3
+release, `6f28d7bb07b31177cf218e51586f6a5e99b38016`. It retains the complete upstream
 repository, tests and licenses. Its Go module path and self-imports remain
 `github.com/egoist/mygo`, preserving the upstream identity. Downstream applications
 can pin an immutable fork version with their Go module replacement mechanism.
 
 No third-party source, module cache or generated build output needs to be
 committed to downstream applications.
+
+## v0.7.3 compatibility migration
+
+- `CommittedText.Lines()` now returns `[]CommittedTextLine`, not `[]TextLine`.
+  Rename explicit references to the old committed geometry type, for example
+  `var lines []ui.CommittedTextLine`. Its `Start`/`End` remain rune offsets
+  relative to the bound node, and `Bounds` remains a transformed window-space
+  DIP rectangle. Upstream `TextLayout.Lines()` returns `[]TextLine`: its offsets
+  are UTF-16 and its `Rect` is layout-local DIPs. Do not interchange these types.
+- New menu code should use upstream `MenuItem.Icon`/`NewMenuIcon`/`SetIcon`.
+  Internal content-menu snapshots with only `ImagePNG` retain their legacy
+  sizing and native owner-draw behavior. If both are present, `Icon` wins;
+  clearing it reveals the legacy image again. GTK custom rows retain explicit
+  accessibility names. Windows menus with any legacy fallback retain their
+  owner-draw mode and 28-DIP legacy icon column so clearing `Icon` needs no
+  rebuild. This also applies when both inputs are present: only the typed icon
+  is drawn. The upstream typed icon column is also 28 DIPs (16 + 12), but a
+  compatibility menu can use owner-draw where a typed-only menu uses a native
+  bitmap on Windows 10.
+  Menus with only typed icons keep the upstream owner-draw/native-bitmap
+  selection and layout. Tray updates restore
+  the owned legacy PNG through the existing native export. No second menu
+  lifecycle is introduced.
+- Explicit compact line boxes still allow ordinary glyph ink to overflow.
+  Inline objects and shifted spans include their ascent/descent extents in
+  layout, including `ObjectDescent` and `BaselineShift`.
 
 Local extensions are deliberately limited to reusable native runtime primitives required by portable LUI behavior:
 

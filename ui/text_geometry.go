@@ -168,20 +168,20 @@ func (g CommittedText) IndexAt(point Point) (int, bool) {
 	return max(a, min(b, i)) - a, true
 }
 
-// TextLine is a visual line's rune range and window-space box. Newline
+// CommittedTextLine is a visual line's rune range and window-space box. Newline
 // separators are excluded, as in the shaped layout's line table.
-type TextLine struct {
+type CommittedTextLine struct {
 	Start, End int
 	Bounds     Rect
 }
 
 // Lines returns the visual lines intersecting this element's text range.
-func (g CommittedText) Lines() ([]TextLine, bool) {
+func (g CommittedText) Lines() ([]CommittedTextLine, bool) {
 	n, p, a, b, ok := g.layout()
 	if !ok {
 		return nil, false
 	}
-	var out []TextLine
+	var out []CommittedTextLine
 	for _, line := range p.tl.Lines {
 		if line.End < a || line.Start > b {
 			continue
@@ -208,7 +208,7 @@ func (g CommittedText) Lines() ([]TextLine, bool) {
 			x, y, h := p.tl.CaretAt(text.CaretPosition{Index: lo, Affinity: text.Downstream})
 			box = Rect{p.x + p.contentX() + x, p.y + p.contentY() + y, 1, h}
 		}
-		out = append(out, TextLine{lo - a, hi - a, transformRect(n.world, box)})
+		out = append(out, CommittedTextLine{Start: lo - a, End: hi - a, Bounds: transformRect(n.world, box)})
 	}
 	return out, true
 }

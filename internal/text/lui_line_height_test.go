@@ -26,6 +26,12 @@ func TestLUIExplicitLineBoxesPreserveInkAndInlineObjectMetrics(t *testing.T) {
 			if object.Height < 70 {
 				t.Errorf("inline object no longer contributes its layout height: %v", object.Height)
 			}
+			shifted := s.Layout(Params{Text: "a\ufffcb", Style: style, Spans: EncodeSpans([]Span{
+				{End: 1}, {End: 2, ObjectWidth: 30, ObjectHeight: 70, ObjectDescent: 40, BaselineShift: 10}, {End: 3},
+			})})
+			if shifted.Height < 110 {
+				t.Errorf("shifted inline object overlaps the next line: height=%v, want at least 110", shifted.Height)
+			}
 		})
 	}
 }

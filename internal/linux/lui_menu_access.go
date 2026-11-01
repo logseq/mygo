@@ -12,6 +12,7 @@ var menuImageGetType func() uintptr
 var menuBinGetChild func(ptr) ptr
 var menuContainerGetType func() uintptr
 var menuLabelSetText func(ptr, *byte)
+var menuImageSetFromPixbuf func(ptr, ptr)
 
 func loadMenuAccess() {
 	menuAccessOnce.Do(func() {
@@ -26,6 +27,7 @@ func loadMenuAccess() {
 		mustBind(libGTK, &menuBinGetChild, "gtk_bin_get_child")
 		mustBind(libGTK, &menuContainerGetType, "gtk_container_get_type")
 		mustBind(libGTK, &menuLabelSetText, "gtk_label_set_text")
+		mustBind(libGTK, &menuImageSetFromPixbuf, "gtk_image_set_from_pixbuf")
 	})
 }
 

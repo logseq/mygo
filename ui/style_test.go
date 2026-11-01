@@ -365,7 +365,7 @@ func TestTextDecorations(t *testing.T) {
 		test func(n int, rows map[int]bool) bool
 	}{
 		{"underline color", func(c *context) {
-			coreText(c, "Hello").Underline().DecorationColor(red).Label("t")
+			coreText(c, "Hello").Underline().DecorationColor(red).DecorationThickness(1).Label("t")
 		}, func(n int, rows map[int]bool) bool { return n > 10 && len(rows) == 1 }},
 		{"thick strikethrough", func(c *context) {
 			coreText(c, "Hello").Strikethrough().DecorationColor(red).DecorationThickness(3).Label("t")

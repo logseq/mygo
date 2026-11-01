@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // Windows 11 still draws Win32 menus as Windows 10 did, while its own menus
@@ -77,7 +79,7 @@ func fluentMenus() bool { return windows11() }
 
 // menuLook is what an item MyGo draws shows.
 type menuLook struct {
-	icon       image.Image
+	legacyIcon image.Image
 	iconColumn bool
 	owner      int
 	label      string // with its mnemonic's &
@@ -88,9 +90,27 @@ type menuLook struct {
 	// column is whether the menu has a column for the marks of checkable
 	// items, which all its items leave room for.
 	column bool
+	// icon is the item's icon, and icons whether the menu has a column
+	// for icons, after that of the marks (menuicon.go).
+	icon  *platform.MenuIcon
+	icons bool
 	// first and last are whether the item is the menu's first or last,
 	// which has the menu's padding above or below it.
 	first, last bool
+	// menu and pos are the menu holding the item and its position there.
+	menu uintptr
+	pos  int
+}
+
+// ftype returns the type the item has besides MFT_OWNERDRAW.
+func (l *menuLook) ftype() uint32 {
+	switch {
+	case l.separator:
+		return mftSeparator
+	case l.radio:
+		return mftRadioCheck
+	}
+	return 0
 }
 
 // padding returns the room above and below the item: the menu's padding,
@@ -366,7 +386,9 @@ func (b *Backend) measureItem(hwnd uintptr, l *menuLook, mis *measureItemStruct)
 	if l.column {
 		w += toPx(menuMarkColumn, dpi)
 	}
-	if l.iconColumn {
+	if l.icons {
+		w += toPx(menuIconColumn, dpi)
+	} else if l.iconColumn {
 		w += toPx(menuMarkColumn, dpi)
 	}
 	if l.accel != "" {
@@ -393,7 +415,8 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 	if selected {
 		plate = &rect{inset, top, r.Right - r.Left - inset, r.Bottom - r.Top - bottom}
 	}
-	paintItem(d.DC, r, p.back, plate, p.plate, float64(toPx(menuRadius, dpi)), func(dc uintptr, r rect) {
+	paintItem(d.DC, r, p.back, plate, p.plate, float64(toPx(menuRadius, dpi)), func(img *bitmap, r rect) {
+		dc := img.dc
 		r.Top, r.Bottom = r.Top+top, r.Bottom-bottom
 		if l.separator {
 			thick := max(toPx(1, dpi), 1)
@@ -432,17 +455,34 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 			}
 			x += toPx(menuMarkColumn, dpi)
 		}
-		if l.iconColumn {
-			if l.icon != nil {
-				side := toPx(16, dpi)
-				y := (r.Top + r.Bottom - side) / 2
+		if l.icons || l.iconColumn {
+			box := toPx(platform.MenuIconSize, dpi)
+			if ic := l.icon; ic != nil && drawMenuIcon != nil {
+				// A template icon in the text's color; one in color
+				// faded when the item is disabled.
+				opacity := 1.0
+				if state&(odsGrayed|odsDisabled) != 0 && !ic.Template {
+					opacity = 0.4
+				}
+				// In a mirrored DC, which lays the item out from the
+				// right, x counts from the right edge of the bitmap.
+				at := x
+				if layout, _, _ := procGetLayout.Call(dc); layout&layoutRTL != 0 {
+					at = r.Right - x - box
+				}
+				drawMenuIcon(img.px, r.Right-r.Left, ic, at, r.Top+(r.Bottom-r.Top-box)/2, box, dibColor(fore), opacity)
+			} else if l.legacyIcon != nil {
 				back := p.back
 				if selected {
 					back = p.plate
 				}
-				drawMenuIcon(dc, l.icon, x, y, side, back)
+				drawLegacyMenuIcon(dc, l.legacyIcon, x, (r.Top+r.Bottom-box)/2, box, back)
 			}
-			x += toPx(menuMarkColumn, dpi)
+			if l.icons {
+				x += toPx(menuIconColumn, dpi)
+			} else {
+				x += toPx(menuMarkColumn, dpi)
+			}
 		}
 		if l.submenu {
 			// A menu laid out right to left has a mirrored DC, which
@@ -479,7 +519,7 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 // menu's DC at r: the background, a highlight with rounded corners
 // (plate, in the item's coordinates, nil for none) antialiased over it,
 // and what draw draws over them, in the bitmap's coordinates.
-func paintItem(dc uintptr, r rect, back uint32, plate *rect, plateColor uint32, radius float64, draw func(dc uintptr, r rect)) {
+func paintItem(dc uintptr, r rect, back uint32, plate *rect, plateColor uint32, radius float64, draw func(img *bitmap, r rect)) {
 	w, h := r.Right-r.Left, r.Bottom-r.Top
 	if w <= 0 || h <= 0 {
 		return
@@ -501,7 +541,7 @@ func paintItem(dc uintptr, r rect, back uint32, plate *rect, plateColor uint32, 
 		}
 	}
 	procGdiFlush.Call()
-	draw(img.dc, rect{0, 0, w, h})
+	draw(img, rect{0, 0, w, h})
 	procGdiFlush.Call()
 	procBitBlt.Call(dc, uintptr(r.Left), uintptr(r.Top), uintptr(w), uintptr(h), img.dc, 0, 0, srcCopy)
 }
@@ -600,9 +640,9 @@ func roundMenu(hwnd uintptr, border uint32) {
 	}
 }
 
-// drawMenuIcon scales an RGBA icon into a temporary DIB and composites its
+// drawLegacyMenuIcon scales an RGBA icon into a temporary DIB and composites its
 // alpha over the native item's actual plate. The OS still owns menu input.
-func drawMenuIcon(dc uintptr, source image.Image, x, y, side int32, background uint32) {
+func drawLegacyMenuIcon(dc uintptr, source image.Image, x, y, side int32, background uint32) {
 	if side <= 0 {
 		return
 	}
