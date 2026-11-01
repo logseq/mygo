@@ -345,6 +345,7 @@ type texture struct {
 	w, h      int
 	gen, ver  uint64
 	lastFrame uint64
+	owned     func(error)
 }
 
 // drawState is what drawing scenes into a target keeps from frame to
@@ -400,6 +401,9 @@ type formatState struct {
 
 // Renderer draws scenes into a CAMetalLayer it adds to a view's layer.
 type Renderer struct {
+	// OwnedCleanup is installed only by explicit image ownership users.
+	OwnedCleanup           func(bool)
+	retryImages            bool
 	device, queue, sampler id
 	// shaderBytes holds the uniforms of the shader being drawn, laid out.
 	shaderBytes []byte
@@ -959,6 +963,9 @@ func (r *Renderer) syncAtlas(t *texture, a *scene.Atlas, format uint) error {
 // imageTexture returns the texture of an image, uploading it when new or
 // changed.
 func (r *Renderer) imageTexture(img *scene.Image) uintptr {
+	if img.Lifetime != nil && !img.Lifetime.Alive() {
+		return 0
+	}
 	if img.Scene != nil {
 		// A canvas, drawn before the scene showing it.
 		if c := r.canvases[img.ID()]; c != nil {
@@ -972,11 +979,23 @@ func (r *Renderer) imageTexture(img *scene.Image) uintptr {
 		if pix == nil {
 			return 0
 		}
+		var finish func(error)
+		if img.Lifetime != nil {
+			var ok bool
+			finish, ok = img.Lifetime.Acquire(r, int64(img.W)*int64(img.H)*4)
+			if !ok {
+				r.retryImages = true
+				return 0
+			}
+		}
 		tex := r.newTexture(img.W, img.H, pixelFormatRGBA8Unorm, usageShaderRead, pix, img.W*4)
 		if tex == 0 {
+			if finish != nil {
+				finish(nil)
+			}
 			return 0
 		}
-		t = &texture{tex: tex, w: img.W, h: img.H, ver: img.Version()}
+		t = &texture{tex: tex, w: img.W, h: img.H, ver: img.Version(), owned: finish}
 		r.images[img.ID()] = t
 		img.Uploaded()
 	} else if t.w != img.W || t.h != img.H {
@@ -1601,6 +1620,13 @@ func or(a, b id) id {
 
 // Render draws s into the layer and presents it.
 func (r *Renderer) Render(s *scene.Scene) (err error) {
+	if r.retryImages {
+		r.retryImages = false
+		r.forgetFrames()
+		for _, t := range r.canvases {
+			t.ver = 0
+		}
+	}
 	if s.Width <= 0 || s.Height <= 0 || r.layer == 0 {
 		return nil
 	}
@@ -1835,6 +1861,9 @@ func (r *Renderer) fit(w, h int, scale float64) (changed bool) {
 // releaseTextures frees what the GPU's frames use, once the window is
 // idle. The next frame makes them again, uploading the atlases whole.
 func (r *Renderer) releaseTextures() {
+	if r.OwnedCleanup != nil {
+		r.OwnedCleanup(true)
+	}
 	release(&r.mask.tex)
 	release(&r.color.tex)
 	for key, t := range r.images {
@@ -2024,7 +2053,7 @@ func (r *Renderer) FrameInfo() string {
 // calls it every 120 frames.
 func (r *Renderer) sweep() {
 	for key, t := range r.images {
-		if r.frame-t.lastFrame > 240 {
+		if t.owned == nil && r.frame-t.lastFrame > 240 {
 			release(&t.tex)
 			delete(r.images, key)
 		}

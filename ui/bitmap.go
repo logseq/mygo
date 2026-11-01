@@ -29,6 +29,7 @@ type Bitmap struct {
 	fresh int
 	// pixelated draws each pixel as a square of its color.
 	pixelated bool
+	noMip     bool
 	// decode decodes again the data DecodeBitmap decoded, which re-makes
 	// the pixels after ReleasePixels: nil for bitmaps NewBitmap made,
 	// canvases' and ones Update changed, which keep their pixels. A
@@ -187,6 +188,9 @@ func (b *Bitmap) imageSize() (float32, float32) {
 // sampling a bitmap far larger than it shows sees only some of its
 // pixels, which shimmer, where a level averages them all.
 func (b *Bitmap) smaller(shrink float32) *scene.Image {
+	if b.noMip {
+		return b.img
+	}
 	if b.img.Scene != nil {
 		return b.img // a canvas, whose pixels the GPU keeps
 	}

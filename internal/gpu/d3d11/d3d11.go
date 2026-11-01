@@ -257,6 +257,7 @@ type texture struct {
 	w, h      int
 	gen, ver  uint64
 	lastFrame uint64
+	owned     func(error)
 }
 
 // canvasTexture is the texture a canvas (scene.NewCanvas) is drawn into,
@@ -270,14 +271,17 @@ type canvasTexture struct {
 
 // Renderer draws scenes into a window.
 type Renderer struct {
-	hwnd      uintptr
-	device    uintptr
-	ctx       uintptr
-	factory   uintptr
-	swapChain uintptr
-	rtv       uintptr
-	w, h      int  // the size drawn, which the swap chain shows
-	warp      bool // the device is WARP, Windows' software rasterizer
+	// OwnedCleanup is installed only by explicit image ownership users.
+	OwnedCleanup func(bool)
+	retryImages  bool
+	hwnd         uintptr
+	device       uintptr
+	ctx          uintptr
+	factory      uintptr
+	swapChain    uintptr
+	rtv          uintptr
+	w, h         int  // the size drawn, which the swap chain shows
+	warp         bool // the device is WARP, Windows' software rasterizer
 
 	// composed tells that the swap chain shows on the window through
 	// DirectComposition, with its alpha, as the content of visual, the
@@ -771,6 +775,9 @@ func (r *Renderer) armSettle() {
 
 // Release frees the renderer's GPU objects.
 func (r *Renderer) Release() {
+	if r.OwnedCleanup != nil {
+		r.OwnedCleanup(true)
+	}
 	r.pending, r.refreshing, r.wake = false, false, nil
 	r.lat.release()
 	r.b.Release()
@@ -866,6 +873,9 @@ func (r *Renderer) syncAtlas(t *texture, a *scene.Atlas, format uint32) error {
 // imageView returns the texture view of an image, uploading it when new or
 // changed.
 func (r *Renderer) imageView(img *scene.Image) uintptr {
+	if img.Lifetime != nil && !img.Lifetime.Alive() {
+		return 0
+	}
 	if img.Scene != nil {
 		// A canvas, drawn before the scene showing it.
 		if c := r.canvases[img.ID()]; c != nil {
@@ -880,7 +890,20 @@ func (r *Renderer) imageView(img *scene.Image) uintptr {
 			return 0
 		}
 		t = &texture{}
+		if img.Lifetime != nil {
+			var ok bool
+			t.owned, ok = img.Lifetime.Acquire(r, int64(img.W)*int64(img.H)*4)
+			if !ok {
+				r.retryImages = true
+				return 0
+			}
+		}
 		if err := r.newTexture(t, img.W, img.H, formatR8G8B8A8Unorm, pix, 4); err != nil {
+			free(&t.srv)
+			free(&t.tex)
+			if t.owned != nil {
+				t.owned(nil)
+			}
 			return 0
 		}
 		t.ver = img.Version()
@@ -907,6 +930,14 @@ func (r *Renderer) imageView(img *scene.Image) uintptr {
 
 // Render draws s into the window and presents it.
 func (r *Renderer) Render(s *scene.Scene) error {
+	if r.retryImages {
+		r.retryImages = false
+		r.diff.Invalidate()
+		r.held = false
+		for _, t := range r.canvases {
+			t.ver = 0
+		}
+	}
 	if s.Width <= 0 || s.Height <= 0 {
 		return nil
 	}
@@ -1609,7 +1640,7 @@ func (r *Renderer) FrameInfo() string {
 // calls it every 120 frames.
 func (r *Renderer) sweep() {
 	for id, t := range r.images {
-		if r.frame-t.lastFrame > 240 {
+		if t.owned == nil && r.frame-t.lastFrame > 240 {
 			free(&t.srv)
 			free(&t.tex)
 			delete(r.images, id)

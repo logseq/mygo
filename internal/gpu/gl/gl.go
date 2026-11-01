@@ -99,6 +99,7 @@ type texture struct {
 	w, h      int
 	gen, ver  uint64
 	lastFrame uint64
+	owned     func(error)
 }
 
 // canvasTexture is the texture a canvas (scene.NewCanvas) is drawn into,
@@ -115,8 +116,11 @@ type canvasTexture struct {
 // with the GL context that was current when New was called. All its
 // methods must be called with that context current.
 type Renderer struct {
-	context uintptr // GDK's, to tell when the area's context changes
-	es      bool
+	// OwnedCleanup is installed only by explicit image ownership users.
+	OwnedCleanup func(restoreContext bool)
+	retryImages  bool
+	context      uintptr // GDK's, to tell when the area's context changes
+	es           bool
 	// dual tells that the context blends with a second color from the
 	// shader (OpenGL 3.3, or GLES with EXT_blend_func_extended).
 	dual bool
@@ -528,6 +532,9 @@ func (r *Renderer) syncAtlas(t *texture, a *scene.Atlas, internal int32, format 
 }
 
 func (r *Renderer) imageTexture(img *scene.Image) uintptr {
+	if img.Lifetime != nil && !img.Lifetime.Alive() {
+		return 0
+	}
 	if img.W > r.maxSize || img.H > r.maxSize {
 		return 0
 	}
@@ -544,7 +551,16 @@ func (r *Renderer) imageTexture(img *scene.Image) uintptr {
 		if pix == nil {
 			return 0
 		}
-		t = &texture{tex: newTexture(glRGBA8, glRGBA, img.W, img.H, pix, img.W*4), w: img.W, h: img.H, ver: img.Version()}
+		var finish func(error)
+		if img.Lifetime != nil {
+			var ok bool
+			finish, ok = img.Lifetime.Acquire(r, int64(img.W)*int64(img.H)*4)
+			if !ok {
+				r.retryImages = true
+				return 0
+			}
+		}
+		t = &texture{tex: newTexture(glRGBA8, glRGBA, img.W, img.H, pix, img.W*4), w: img.W, h: img.H, ver: img.Version(), owned: finish}
 		r.images[img.ID()] = t
 		img.Uploaded()
 	} else if t.w != img.W || t.h != img.H {
@@ -571,6 +587,14 @@ func (r *Renderer) imageTexture(img *scene.Image) uintptr {
 // Render draws s into the bound framebuffer, which is s.Width×s.Height
 // device pixels.
 func (r *Renderer) Render(s *scene.Scene) error {
+	if r.retryImages {
+		r.retryImages = false
+		r.diff.Invalidate()
+		r.held = false
+		for _, t := range r.canvases {
+			t.ver = 0
+		}
+	}
 	if s.Width <= 0 || s.Height <= 0 {
 		return nil
 	}
@@ -1157,6 +1181,9 @@ func or(a, b uint32) uint32 {
 
 // forget drops the objects of a context that is gone.
 func (r *Renderer) forget() {
+	if r.OwnedCleanup != nil {
+		r.OwnedCleanup(false)
+	}
 	r.program, r.vao, r.buf, r.empty, r.ubo = 0, 0, 0, 0, 0
 	r.down, r.blur, r.passVAO = passProgram{}, passProgram{}, 0
 	clear(r.effects)
@@ -1193,6 +1220,9 @@ func softwareRenderer(name string) bool {
 // Release deletes the renderer's objects when its context is current, and
 // otherwise leaves them to the context, which deletes them with itself.
 func (r *Renderer) Release() {
+	if r.OwnedCleanup != nil {
+		r.OwnedCleanup(true)
+	}
 	r.b.Release()
 	if errLoad != nil || currentContext() != r.context {
 		r.forget()
@@ -1265,7 +1295,7 @@ func (r *Renderer) FrameInfo() string {
 // calls it every 120 frames.
 func (r *Renderer) sweep() {
 	for key, t := range r.images {
-		if r.frame-t.lastFrame > 240 {
+		if t.owned == nil && r.frame-t.lastFrame > 240 {
 			glDeleteTextures(1, &t.tex)
 			delete(r.images, key)
 		}

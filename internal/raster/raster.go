@@ -269,6 +269,9 @@ func (r *renderer) render(dst *Image, s *scene.Scene, area image.Rectangle, boun
 				r.glyphs(op)
 			}
 		case scene.OpImage:
+			if op.Image != nil && op.Image.Lifetime != nil && !op.Image.Lifetime.Alive() {
+				continue
+			}
 			if r.blurred != nil && r.blurred[i] != nil {
 				// The image blurred, in its place.
 				b := *op

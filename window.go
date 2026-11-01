@@ -787,6 +787,9 @@ func (w *Window) Destroy() { onMain(w.destroy) }
 func (w *Window) destroy() {
 	if n := w.native; n != nil {
 		w.closeState()
+		if c := w.conn; c != nil && c.RetireImages != nil {
+			c.RetireImages()
+		}
 		n.Close()
 		// Backends report Closed synchronously, but be defensive.
 		(&windowHandler{w}).Closed()

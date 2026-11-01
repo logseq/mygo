@@ -116,14 +116,16 @@ type windowHost struct {
 	// its place, and gpuSince when the renderer was made. After a failure,
 	// retryAt is when a frame makes another, and backoff how long the next
 	// failure waits.
-	gpuTried bool
-	onGPU    bool
-	degraded bool
-	gpuSince time.Time
-	retryAt  time.Time
-	backoff  time.Duration
-	soft     raster.Renderer
-	last     *scene.Scene
+	gpuTried     bool
+	onGPU        bool
+	degraded     bool
+	gpuSince     time.Time
+	retryAt      time.Time
+	backoff      time.Duration
+	soft         raster.Renderer
+	ownedBitmaps map[*OwnedBitmap]bool
+	ownedClosing bool
+	last         *scene.Scene
 	// lastFrame is when the last frame was presented.
 	lastFrame time.Time
 	// framing tells that the surface asked for the frame being drawn, and
@@ -430,6 +432,9 @@ func (h *windowHost) size() (float32, float32, float32) {
 }
 
 func (h *windowHost) present(s *scene.Scene) {
+	if feature := ownedBitmapFeature.Load(); feature != nil {
+		feature.bind(h, s)
+	}
 	h.last, h.path = s, ""
 	defer h.recheck()
 	if s.Width <= 0 || s.Height <= 0 {
@@ -556,6 +561,9 @@ func (h *windowHost) screenWide() bool {
 // that fails too, frames are drawn in memory until a later try.
 func (h *windowHost) render(s *scene.Scene) bool {
 	for try := 0; h.gpu != nil; try++ {
+		if feature := ownedBitmapFeature.Load(); feature != nil {
+			feature.render(h, s)
+		}
 		err := h.gpu.Render(s)
 		if err == nil {
 			return true
@@ -674,6 +682,9 @@ func (h *windowHost) capture() (int, int, []byte) {
 
 func (h *windowHost) detach() {
 	h.detached = true
+	if feature := ownedBitmapFeature.Load(); feature != nil {
+		feature.detach(h)
+	}
 	if h.idleTimer != nil {
 		h.idleTimer.Stop()
 	}

@@ -251,6 +251,13 @@ func (a *Application) prepareQuit() bool {
 func (a *Application) finish() {
 	a.finished.Do(func() {
 		a.ended = true
+		// No queued UI work can be relied on after Run. Normal window close
+		// already detached; drain opt-in owners on abnormal loop exit too.
+		for _, w := range Windows() {
+			if c := w.conn; c != nil && c.RetireImages != nil {
+				w.detachContent()
+			}
+		}
 		stopNativeCalls()
 		stopFileWatches()
 		clipboardStopped = true
