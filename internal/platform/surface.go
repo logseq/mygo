@@ -124,7 +124,11 @@ type IdleSurface interface {
 type TextInputState struct {
 	// Active is true while an editable element has the keyboard.
 	Active bool
+	// CaretCurrent distinguishes current client geometry from a retained caret.
+	CaretCurrent bool
 	// Caret is the caret's rectangle, in DIPs relative to the surface.
+	// A custom Client retains its last measured caret while layout is pending;
+	// a replacement client starts with no geometry until it is measured.
 	Caret RectF
 	// Text is the input's text around the caret, and Start and End are the
 	// selection in it, in runes: both the caret when nothing is selected.

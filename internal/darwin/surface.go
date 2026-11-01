@@ -473,7 +473,7 @@ func (s *surface) SetTextInput(t platform.TextInputState) {
 		s.marked = ""
 		send(send(s.view, "inputContext"), "discardMarkedText")
 	}
-	moved := t.Active != s.input.Active || t.Caret != s.input.Caret
+	moved := t.Active != s.input.Active || t.Caret != s.input.Caret || t.Client != s.input.Client || t.CaretCurrent != s.input.CaretCurrent
 	s.input = t
 	if t.Active && moved {
 		send(send(s.view, "inputContext"), "invalidateCharacterCoordinates")
@@ -1022,12 +1022,16 @@ func registerSurfaceClass() {
 					return cgRect{}
 				}
 				bounds, used, ok := client.BoundsForRange(*rangeWanted)
-				if !ok {
+				if ok {
+					c = bounds
+					if actual != nil {
+						*actual = nsRange{Location: uint(used.Start), Length: uint(max(0, used.End-used.Start))}
+					}
+				} else if c.W <= 0 || c.H <= 0 {
 					return cgRect{}
-				}
-				c = bounds
-				if actual != nil {
-					*actual = nsRange{Location: uint(used.Start), Length: uint(max(0, used.End-used.Start))}
+				} else if actual != nil {
+					// Pending layout has no measured range in the current text.
+					*actual = nsRange{Location: nsNotFound}
 				}
 			}
 			inWindow := msgConvertRectView(self, sel("convertRect:toView:"), NSRect{Origin: NSPoint{c.X, c.Y}, Size: NSSize{max(c.W, 1), c.H}}, 0)
