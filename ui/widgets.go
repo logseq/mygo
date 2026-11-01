@@ -555,6 +555,10 @@ func coreImage(c *context, src ImageSource) *node {
 	switch s := src.(type) {
 	case *Bitmap:
 		e.image = s
+	case *OwnedBitmap:
+		if s != nil {
+			e.image = s.bitmap
+		}
 	case *SVG:
 		e.svg = s
 	}

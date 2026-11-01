@@ -1,5 +1,39 @@
 # LUI compatibility branch
 
+## Opt-in owned bitmaps
+
+`ui.NewOwnedBitmapRGBA(width, height, pixels, ui.OwnedBitmapOptions{...})`
+accepts exactly `4*width*height` premultiplied packed RGBA8 bytes and positive,
+non-overflowing dimensions. Success transfers the exact slice without copying;
+the caller must stop using all aliases. Failure leaves ownership with the caller.
+The immutable `*ui.OwnedBitmap` is an `ui.ImageSource`, including
+`Painter.Image(owned, rect, ui.Contain)`. It has no encoded snapshot, decoder,
+restore callback, mipmaps or update operation. Ordinary `Bitmap` APIs are unchanged.
+
+All views borrow the owner. `ticket := owned.Dispose()` is terminal, safe from
+any goroutine and idempotent. Old views, scenes and renderer batches cannot
+re-upload the tombstone. Wait on `ticket.Done()` off the UI thread before
+returning CPU pixel credit; all internal references to the input pixel storage
+are then cleared. `ticket.Err()` is final after Done closes. Window teardown
+drains borrows even when no future frame or posted callback can run, including
+Dispose after the application's event loop exits.
+
+`OwnedBitmapOptions.AcquireTexture(payloadBytes)` optionally reserves one
+`4*width*height` GPU payload per renderer incarnation, before native allocation.
+It must not block or re-enter rendering/dispatch/this bitmap. Acceptance requires
+a non-nil release function. Rejection skips this paint without a permanent failed
+cache; a later paint retries. Owned textures do not use the ordinary idle sweep:
+explicit Dispose or renderer teardown retires them. GPU credit returns exactly
+once, after queued uses complete and app-owned native references retire.
+
+Retirement uses the exact current GL/WebGL context and Finish, Metal pending-frame
+drain plus `waitLast`, or a D3D11 event query. Unsupported/lost/mismatched contexts,
+device errors and failed barriers close Done with an error and quarantine GPU
+credit instead of falsely returning it. No renderer-wide Release, Flush alone or
+texture-map deletion is treated as completion. These opt-in barriers are not run
+on ordinary frames. Payload accounting is not RSS or actual driver/VRAM usage;
+decoder, CPU admission and shared GPU quota policies remain the caller's concern.
+
 This branch started at upstream MyGo v0.6.4, commit
 `6255ea40139d06e0762a7c4a32626148ba410478`, and merges the official v0.7.3
 release, `6f28d7bb07b31177cf218e51586f6a5e99b38016`. It retains the complete upstream

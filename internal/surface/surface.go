@@ -97,6 +97,9 @@ type Conn struct {
 	ToggleDevTools func()
 	// Detach is called once the window is closed.
 	Detach func()
+	// RetireImages is an opt-in, UI-owner barrier before native destruction.
+	// Detach still drains image owners if the backend closes unexpectedly.
+	RetireImages func()
 }
 
 // Content is implemented by package ui.

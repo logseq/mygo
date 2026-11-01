@@ -1053,6 +1053,9 @@ func fitIn(box Rect, w, h float32, fit Fit) (dst, src Rect) {
 }
 
 func (p *Painter) drawBitmap(img *Bitmap, box Rect, fit Fit, radius [4]float32, gray bool) {
+	if img.img.Lifetime != nil && !img.img.Lifetime.Alive() {
+		return
+	}
 	// A bitmap's own size is its pixels in DIPs, as an Image lays it out.
 	iw, ih := float32(img.w), float32(img.h)
 	dst, frac := fitIn(box, iw, ih, fit)
@@ -1298,6 +1301,10 @@ func (p *Painter) Text(x, y float32, s string, size float32, c Color) {
 // color for its currentColor), scaled to fit r.
 func (p *Painter) Image(src ImageSource, r Rect, fit Fit) {
 	switch s := src.(type) {
+	case *OwnedBitmap:
+		if s != nil {
+			p.drawBitmap(s.bitmap, r, fit, [4]float32{}, false)
+		}
 	case *Bitmap:
 		if s != nil && s.w > 0 && s.h > 0 {
 			p.drawBitmap(s, r, fit, [4]float32{}, false)

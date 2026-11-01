@@ -584,6 +584,9 @@ func (b *Builder) Build(s *scene.Scene, image func(*scene.Image) uintptr) *scene
 			if img == nil || op.Rect.Empty() || img.W == 0 || img.H == 0 {
 				continue
 			}
+			if img.Lifetime != nil && !img.Lifetime.Alive() {
+				continue
+			}
 			src := op.Src
 			iw, ih := float32(img.W), float32(img.H)
 			var tex uintptr

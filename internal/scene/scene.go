@@ -464,6 +464,15 @@ type Image struct {
 	// nil for images that keep their pixels.
 	Restore func() []byte
 	Dropped func()
+	// Lifetime is an opt-in, terminal image lifetime. Ordinary bitmaps have
+	// no hooks. Owner is opaque to renderers; Acquire precedes native upload.
+	Lifetime *ImageLifetime
+}
+
+type ImageLifetime struct {
+	Owner   any
+	Alive   func() bool
+	Acquire func(renderer any, payloadBytes int64) (finish func(error), ok bool)
 }
 
 // NewCanvas returns a w×h image that renderers draw from a scene of its
@@ -501,6 +510,9 @@ func (m *Image) Changed() { m.version++ }
 // from Restore when an owner dropped them. The pixels stay then, until
 // the owner drops them again or a renderer's upload does (Uploaded).
 func (m *Image) Pixels() []byte {
+	if m.Lifetime != nil && !m.Lifetime.Alive() {
+		return nil
+	}
 	if m.Pix == nil && m.Restore != nil {
 		m.Pix = m.Restore()
 	}
