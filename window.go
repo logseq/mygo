@@ -1781,6 +1781,9 @@ func (h *windowHandler) ShouldClose() bool {
 	fire1(&h.w.onClose, e)
 	if !e.prevented {
 		h.w.closeState()
+		if c := h.w.conn; c != nil && c.RetireImages != nil {
+			c.RetireImages()
+		}
 	}
 	return !e.prevented
 }
