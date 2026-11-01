@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -19,7 +20,8 @@ var (
 	epoxyGLVersion    func() int32
 	epoxyIsDesktopGL  func() bool
 	epoxyHasExtension func(name string) bool
-	currentGDKContext func() uintptr // gdk_gl_context_get_current, when GDK is loaded
+	currentGDKContext func() uintptr                 // gdk_gl_context_get_current, when GDK is loaded
+	currentEGLContext atomic.Pointer[func() uintptr] // enabled only by NewOffscreen
 
 	// GTK's functions of a GtkGLArea's context, when GTK is loaded
 	// (MakeAreaCurrent).
@@ -241,10 +243,15 @@ func needsRestore(area, current uintptr, has bool) bool {
 }
 
 func currentContext() uintptr {
-	if currentGDKContext == nil {
-		return 0
+	if currentGDKContext != nil {
+		if c := currentGDKContext(); c != 0 {
+			return c
+		}
 	}
-	return currentGDKContext()
+	if current := currentEGLContext.Load(); current != nil {
+		return (*current)()
+	}
+	return 0
 }
 
 func goString(p uintptr) string {

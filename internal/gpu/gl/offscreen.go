@@ -52,6 +52,7 @@ func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
 	}
 	var (
 		getPlatformDisplay func(platform uint32, native uintptr, attribs unsafe.Pointer) uintptr
+		getCurrentContext  func() uintptr
 		initialize         func(display uintptr, major, minor *int32) uint32
 		bindAPI            func(api uint32) uint32
 		chooseConfig       func(display uintptr, attribs *int32, configs *uintptr, size int32, n *int32) uint32
@@ -64,6 +65,7 @@ func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
 		"eglGetPlatformDisplay": &getPlatformDisplay, "eglInitialize": &initialize, "eglBindAPI": &bindAPI,
 		"eglChooseConfig": &chooseConfig, "eglCreateContext": &createContext, "eglMakeCurrent": &makeCurrent,
 		"eglDestroyContext": &destroyContext, "eglTerminate": &terminate,
+		"eglGetCurrentContext": &getCurrentContext,
 	} {
 		sym, err := purego.Dlsym(lib, name)
 		if err != nil || sym == 0 {
@@ -71,6 +73,7 @@ func NewOffscreen(es bool, w, h int) (o *Offscreen, err error) {
 		}
 		purego.RegisterFunc(fn, sym)
 	}
+	currentEGLContext.CompareAndSwap(nil, &getCurrentContext)
 	o = &Offscreen{w: w, h: h}
 	var undo []func()
 	o.release = func() {
