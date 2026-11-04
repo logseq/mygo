@@ -40,6 +40,13 @@ func (c *Context) build() *context {
 // Valid reports whether this context is building a view.
 func (c *Context) Valid() bool { return c.build() != nil }
 
+// InTextFlow reports whether children built now must be text elements.
+// Call it on the UI thread. It returns false outside an active build.
+func (c *Context) InTextFlow() bool {
+	ctx := c.build()
+	return ctx != nil && ctx.parent != nil && ctx.parent.kind == kindText
+}
+
 // Invalidate requests a frame from any goroutine.
 func (c *Context) Invalidate() {
 	if c != nil {
