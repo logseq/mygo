@@ -1,5 +1,31 @@
 # Migrating to checked elements
 
+## Build-time text flow query
+
+`Context.InTextFlow()` is an additive, read-only UI-thread query of the current
+build parent. It reports true inside a text element's `Children` callback and
+false outside an active build, including for a nil or closed context. The result
+is scoped to the current callback: do not cache it or infer it from a retained
+application tree. It does not change the rule that text accepts only text
+elements, such as `Text`, `Link` and `RichText`.
+
+Adapters that support both inline text and standalone layout can choose their
+primitive from the actual context, without changing link activation:
+
+```go
+var link ui.Element
+if c.InTextFlow() {
+    link = ui.Link(c, "", url)
+} else {
+    link = ui.LinkBase(c, url)
+}
+link.Children(func() { ui.Text(c, "Documentation") })
+```
+
+Keep arbitrary layout and icons on the standalone path. This query does not make
+non-text children legal inside text, expose retained nodes, or change wire APIs.
+Existing callers need no migration.
+
 ## Final frame text-input geometry
 
 Full and repaint frames now publish the text-input caret after all `AfterFrame`
