@@ -67,6 +67,14 @@ const (
 	// with Ctrl held comes as InputZoom too, and a mouse wheel's notches
 	// as InputScroll with Ctrl in Mods.
 	InputZoom
+	// InputClick is emitted only to CaptureInput when a primary pointer release
+	// qualifies as a click, including on a plain hit with no native gesture.
+	// Returning true suppresses any native activation.
+	InputClick
+	// InputPointerCancel ends an owned pointer gesture without a release or click.
+	// HandleCapturedPointer receives it on Escape, deactivation, capture loss,
+	// removal or window close. It must discard, not commit, its preview.
+	InputPointerCancel
 )
 
 // InputEvent is input an element takes as it comes (HandleInput).
@@ -85,8 +93,9 @@ type InputEvent struct {
 	Code   KeyCode
 	Mods   Modifiers
 	Repeat bool
-	// Text of InputText, InputCompose and InputCommand, and Caret the
-	// rune of an InputCompose's caret.
+	// Text of InputText, InputCompose and InputCommand. On keys, Text is
+	// native glyph metadata, not insertion; InputText commits text. Caret
+	// is an InputCompose's rune offset.
 	Text  string
 	Caret int
 	// X and Y locate the pointer relative to the element's box.
@@ -144,6 +153,28 @@ type InputEvent struct {
 // instead (Clicked, Shortcut, Dragged).
 func (e *node) HandleInput(fn func(ev InputEvent) bool) *node {
 	e.inputFn = fn
+	return e
+}
+
+// HandleCapturedPointer is HandleInput with explicit cancellation of primary
+// pointer gestures. A primary down it accepts owns movement and release outside
+// the element. Cancellation never activates a click or a context menu. Other
+// input handlers retain their existing deactivation behavior.
+func (e *node) HandleCapturedPointer(fn func(ev InputEvent) bool) *node {
+	s := e.st
+	e.inputFn = func(ev InputEvent) bool {
+		if ev.Kind == InputPointerUp && ev.Button == 0 && ev.Canceled && s.capturedPointer {
+			s.capturedPointer = false
+			ev.Kind = InputPointerCancel
+		} else if ev.Kind == InputPointerUp && ev.Button == 0 || ev.Kind == InputPointerCancel {
+			s.capturedPointer = false
+		}
+		handled := fn(ev)
+		if ev.Kind == InputPointerDown && ev.Button == 0 && handled {
+			s.capturedPointer = true
+		}
+		return handled
+	}
 	return e
 }
 
@@ -206,7 +237,13 @@ func (rt *engine) rawKey(ev platform.SurfaceEvent) bool {
 	if ev.Kind == platform.RawKeyReleased {
 		kind = InputKeyUp
 	}
-	input := InputEvent{Kind: kind, Key: Key(ev.Key), PhysicalKey: Key(ev.PhysicalKey), Code: KeyCode(ev.Code), Mods: Modifiers(ev.Mods), Repeat: ev.Repeat}
+	input := InputEvent{Kind: kind, Key: Key(ev.Key), PhysicalKey: Key(ev.PhysicalKey), Code: KeyCode(ev.Code), Mods: Modifiers(ev.Mods), Repeat: ev.Repeat, Text: ev.Text}
+	if rt.captureInput(input, rt.focused) {
+		return true
+	}
+	if kind == InputKeyDown && ev.BeforeContent != nil && ev.BeforeContent() {
+		return true
+	}
 	rt.observeFocus(input)
 	return rt.deliver(rt.focusHandler(), input)
 }

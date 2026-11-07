@@ -11,10 +11,10 @@ import (
 	"github.com/egoist/mygo/transfer"
 )
 
-// Context builds a window's user interface for one frame. The window's
-// view function receives it on the main thread; it is only valid during
-// that call. A frame may rebuild the view in several passes; neither a
-// Context nor its Elements may be saved for a later call.
+// context is the frame-scoped builder behind the public Context. The window's
+// view uses it on the main thread, only for that call. Neither its frame data
+// nor Elements may be retained. Explicitly documented UI-thread queries on
+// the public Context, such as WindowFocusEpoch, have their own lifetime.
 type context struct {
 	rt     *engine
 	parent *node
@@ -77,6 +77,22 @@ type context struct {
 	depthStarts []int
 }
 
+// WindowFocusEpoch returns the window's current focus lifecycle revision.
+// It starts at one and advances synchronously on each change between focused
+// and blurred, even when no view is built between events. Duplicate focus or
+// blur notifications do not advance it. It does not track control focus.
+// Compare revisions only within the same Context, on the UI thread. This query
+// is valid between builds, including CaptureInput; it does not request a frame.
+// In CaptureInput, query the Context that registered the current callback,
+// not a revision cached during a view build.
+// A nil context or a closed window returns zero.
+func (c *Context) WindowFocusEpoch() uint64 {
+	if rt := c.runtime(); rt != nil {
+		return rt.windowFocusEpoch
+	}
+	return 0
+}
+
 const chunkSize = 32
 
 // alloc returns a zeroed element from the frame's arena.
@@ -99,6 +115,10 @@ func (c *context) alloc() *node {
 }
 
 func (c *context) reset(now time.Time, w, h float32) {
+	clear(c.rt.boundRefs)
+	c.rt.boundRefs = c.rt.boundRefs[:0]
+	clear(c.rt.afterFrame)
+	c.rt.afterFrame = c.rt.afterFrame[:0]
 	for _, f := range c.rt.focusFields {
 		clear(f.members)
 		f.members = f.members[:0]
@@ -722,6 +742,7 @@ type state struct {
 	// accessDisabled, that assistive technology reads it as unavailable
 	// (AccessDisabled).
 	ignoreInput, accessHidden, accessDisabled bool
+	pointerEvents                             bool
 	// activeDescendant is the element that has the keyboard focus while
 	// this one does (ActiveDescendant), 0 for none.
 	activeDescendant uint64
@@ -760,9 +781,10 @@ type state struct {
 	typing  bool
 	// press is where the pointer went down in the element; dragX and dragY
 	// add up its moves since the last frame.
-	pressX, pressY float32
-	dragX, dragY   float32
-	pressed        bool
+	pressX, pressY  float32
+	dragX, dragY    float32
+	pressed         bool
+	capturedPointer bool
 	// pressButton is the button pressing the element: 0 the primary, 1
 	// the secondary, 2 the middle (pressedPrimary).
 	pressButton int

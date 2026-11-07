@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
+	"image/png"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -610,6 +612,9 @@ func (t *Tester) targetCenter(s string, button int) (float32, float32, error) {
 		return 0, 0, fmt.Errorf("ui: %q is covered by a web view", s)
 	}
 	hit := t.rt.hitChain(cx, cy)
+	if !t.rt.states[n.id].pointerEvents && !t.rt.states[n.id].ignoreInput {
+		return x, y, nil
+	}
 	if button == 0 {
 		for _, id := range hit {
 			st := t.rt.states[id]
@@ -798,9 +803,13 @@ func (t *Tester) CloseMenu() {
 	if t.rt.menu.drawn != nil {
 		t.rt.menu.drawn = nil
 		t.settle()
-		return
 	}
+	chosen := t.h.chosen
 	t.h.menu, t.h.chosen = nil, nil
+	if chosen != nil {
+		chosen(0)
+		t.settle()
+	}
 }
 
 // currentMenu returns the context menu shown, the one drawn in the window
@@ -1086,4 +1095,26 @@ func (t *Tester) Focused(s string) bool {
 		}
 	}
 	return false
+}
+
+// MenuImage returns the decoded image sent to the native popup service for an
+// item of the currently open menu, or nil. It does not render substitute UI.
+func (t *Tester) MenuImage(label string) image.Image {
+	var find func(*platform.Menu) image.Image
+	find = func(menu *platform.Menu) image.Image {
+		if menu == nil {
+			return nil
+		}
+		for _, it := range menu.Items {
+			if it.Label == label {
+				im, _ := png.Decode(bytes.NewReader(it.ImagePNG))
+				return im
+			}
+			if im := find(it.Submenu); im != nil {
+				return im
+			}
+		}
+		return nil
+	}
+	return find(t.h.menu)
 }

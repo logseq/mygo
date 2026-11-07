@@ -169,10 +169,17 @@ func applyItemState(item id, it *platform.MenuItem) {
 	if it.Type != platform.MenuItemSeparator {
 		applyItemSubtitle(item, it)
 	}
-	if it.Type != platform.MenuItemSeparator && menuImage != nil {
+	if it.Type != platform.MenuItemSeparator {
 		var img id
 		if it.Icon != nil {
-			img = menuImage(it.Icon)
+			if menuImage != nil {
+				img = menuImage(it.Icon)
+			}
+		} else if len(it.ImagePNG) > 0 {
+			img = autorelease(send(send(class("NSImage"), "alloc"), "initWithData:", uintptr(nsData(it.ImagePNG))))
+			if img != 0 {
+				msgSetSize(img, sel("setSize:"), NSSize{16, 16})
+			}
 		}
 		if send(item, "image") != img {
 			send(item, "setImage:", uintptr(img))
@@ -271,6 +278,9 @@ func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 }
 
 func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.Point) {
+	if w, ok := pw.(*window); ok && (w == nil || w.closed) {
+		return
+	}
 	withPool(func() {
 		owner := newOwner()
 		defer dropOwner(owner)

@@ -158,6 +158,7 @@ var accessRoles = map[platform.AccessRole][2]string{
 	// Content removed and added, as WebKit's del and ins.
 	platform.RoleDeletion:  {"AXGroup", "AXDeleteStyleGroup"},
 	platform.RoleInsertion: {"AXGroup", "AXInsertStyleGroup"},
+	platform.RoleTabPanel:  {"AXGroup", ""},
 }
 
 // orientation returns the NSAccessibilityOrientation of a node, as

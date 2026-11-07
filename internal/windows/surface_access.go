@@ -195,6 +195,7 @@ var uiaControlTypes = map[platform.AccessRole]int32{
 	platform.RoleSeparator: 50038, platform.RoleRowHeader: 50035, platform.RoleSearch: 50026,
 	platform.RoleArticle: 50026, platform.RoleGrid: 50028, platform.RoleTreeGrid: 50028, // DataGrid
 	platform.RoleDeletion: 50020, platform.RoleInsertion: 50020,
+	platform.RoleTabPanel: 50033,
 }
 
 // ariaRoles are the ARIA roles of nodes whose control type does not say

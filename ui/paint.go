@@ -309,7 +309,11 @@ func (p *Painter) element(e *node) {
 	}
 	saved := p.opacity
 	if e.flags&flagDisabled != 0 && !e.undimmed {
-		p.opacity *= 0.5
+		if e.disabledOpacity != nil {
+			p.opacity *= *e.disabledOpacity
+		} else {
+			p.opacity *= 0.5
+		}
 	}
 	// In its layer (paintEffect, paintGroup), the layer takes its fade.
 	if !e.effecting || e.effect != nil {

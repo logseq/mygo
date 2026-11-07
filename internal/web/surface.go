@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"syscall/js"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/gpu/gl"
@@ -42,9 +43,6 @@ type surface struct {
 	closed               bool
 	composing            bool
 	text                 platform.TextInputState
-	// copied tells that a key copying went to the content, which the copy
-	// event that follows does not repeat.
-	copied bool
 	// held are the keys the content got pressed and not yet released,
 	// whose key ups an input method or Command may keep (key).
 	held platform.HeldKeys
@@ -52,6 +50,7 @@ type surface struct {
 	// downX and downY place the last press, where a context menu opens.
 	downX, downY float64
 	clicks       platform.ClickCounter
+	buttons      int
 }
 
 func newSurface(w *window) (*surface, error) {
@@ -168,8 +167,14 @@ func (s *surface) listen() {
 		if kind, b, ok := chord(e.Get("button").Int(), e.Get("buttons").Int()); ok {
 			ev := platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: b, Mods: s.mods(e), Pointer: pointer, Pressure: pressure}
 			if kind == platform.PointerDown {
+				s.buttons |= 1 << b
 				s.downX, s.downY = x, y
 				ev.Clicks = s.clicks.Press(b, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick)
+			} else {
+				if s.buttons&(1<<b) == 0 {
+					return
+				}
+				s.buttons &^= 1 << b
 			}
 			s.send(ev)
 		}
@@ -194,6 +199,7 @@ func (s *surface) listen() {
 		}
 		c.Call("setPointerCapture", e.Get("pointerId"))
 		b := buttonOf(button)
+		s.buttons |= 1 << b
 		s.downX, s.downY = x, y
 		clicks := s.clicks.Press(b, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick) // browsers tell no double-click settings
 		pointer, pressure := device(e)
@@ -207,21 +213,28 @@ func (s *surface) listen() {
 		if button == 3 || button == 4 {
 			return
 		}
+		if s.buttons&(1<<buttonOf(button)) == 0 {
+			return
+		}
 		x, y := s.point(e)
 		pointer, _ := device(e)
+		s.buttons &^= 1 << buttonOf(button)
 		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Mods: s.mods(e), Pointer: pointer})
 	})
 	// The browser took the pointer, as a touch it scrolls or zooms the
 	// page with, or one the system took: its buttons go up with no
 	// release, and the press commits nothing.
-	s.on(c, "pointercancel", true, func(e js.Value) {
-		if !primary(e) {
+	cancelPointer := func(e js.Value) {
+		if !primary(e) || s.buttons == 0 {
 			return
 		}
+		s.buttons = 0
 		x, y := s.point(e)
 		pointer, _ := device(e)
 		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel, X: x, Y: y, Mods: s.mods(e), Pointer: pointer})
-	})
+	}
+	s.on(c, "pointercancel", true, cancelPointer)
+	s.on(c, "lostpointercapture", true, cancelPointer)
 	s.on(c, "pointerleave", true, func(e js.Value) {
 		if !primary(e) {
 			return
@@ -357,6 +370,7 @@ func (s *surface) listen() {
 	})
 	s.on(in, "blur", true, func(js.Value) {
 		s.w.focused = false
+		s.buttons = 0
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		s.w.h.Blurred()
 	})
@@ -429,10 +443,7 @@ const lineHeight = 16
 // the text, which the clipboard event carries to the system's clipboard.
 func (s *surface) copy(e js.Value, cmd string) {
 	e.Call("preventDefault")
-	if !s.copied {
-		s.send(platform.SurfaceEvent{Kind: platform.SurfaceCommand, Text: cmd})
-	}
-	s.copied = false
+	s.send(platform.SurfaceEvent{Kind: platform.SurfaceCommand, Text: cmd})
 	s.w.b.mu.Lock()
 	text, all := s.w.b.clip, s.w.b.clipData
 	s.w.b.mu.Unlock()
@@ -538,9 +549,6 @@ func (s *surface) mods(e js.Value) platform.Modifiers {
 // those typing text, copying and pasting, and those of its own (F5, F11,
 // F12, …).
 func (s *surface) key(e js.Value, down bool) {
-	if down {
-		s.copied = false
-	}
 	name, code := e.Get("key").String(), e.Get("code").String()
 	mods := s.mods(e)
 	if e.Get("isComposing").Bool() || e.Get("keyCode").Int() == 229 {
@@ -575,14 +583,12 @@ func (s *surface) key(e js.Value, down bool) {
 	primary := mods&platform.ModCtrl != 0
 	if down && primary && mods&(platform.ModAlt|platform.ModShift) == 0 {
 		switch k {
-		case platform.KeyV:
-			// The paste event brings the clipboard's text.
-			return
-		case platform.KeyC, platform.KeyX:
-			// The content copies now, and the copy event that follows
-			// gives the browser the text.
-			s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool()})
-			s.copied = true
+		case platform.KeyC, platform.KeyX, platform.KeyV:
+			// Clipboard events carry the system's data. Dispatch the key
+			// without running the built-in clipboard command a second time.
+			if s.send(platform.SurfaceEvent{Kind: platform.RawKeyPressed, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(name)}) {
+				e.Call("preventDefault")
+			}
 			return
 		}
 	}
@@ -590,7 +596,9 @@ func (s *surface) key(e js.Value, down bool) {
 	if down {
 		kind = platform.KeyPressed
 	}
-	s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool()})
+	if s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(name)}) {
+		e.Call("preventDefault")
+	}
 	if !down {
 		return
 	}
@@ -612,9 +620,18 @@ func (s *surface) rawKey(e js.Value, code string, physical platform.Key, mods pl
 	if down {
 		kind = platform.RawKeyPressed
 	}
-	if s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool()}) {
+	if s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(e.Get("key").String())}) {
 		e.Call("preventDefault")
 	}
+}
+
+func domKeyText(name string) string {
+	if utf8.RuneCountInString(name) == 1 {
+		if r, _ := utf8.DecodeRuneInString(name); unicode.IsPrint(r) {
+			return name
+		}
+	}
+	return ""
 }
 
 // keyOf returns the key of a KeyboardEvent's key and code: letters and

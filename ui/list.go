@@ -36,6 +36,10 @@ const listSearch = 1000
 // knows of the heights of its rows, kept in the app's state. Give each
 // List a ListState of its own; set its fields before building the List.
 type ListState struct {
+	overscan   *int
+	itemExtent float32
+	keyIndex   func(any) (int, bool)
+
 	// Handle names this list independently of its per-pass node.
 	Handle
 
@@ -225,12 +229,14 @@ type ListState struct {
 	// width, gap and padTop are those the rows were placed with: the width
 	// of the rows, the gap between them, and where the first starts below
 	// the list's top. border is its top border.
-	width       float32
-	gap         float64
-	padTop      float64
-	border      float64
-	first, last int
-	atEnd       bool
+	width                         float32
+	gap                           float64
+	padTop                        float64
+	border                        float64
+	first, last                   int
+	requestedFirst, requestedLast int
+	requestedPins, buildPins      []int
+	atEnd                         bool
 	// read is set when the view read where the list is, which a frame
 	// that moves it then builds another for.
 	read bool
@@ -354,6 +360,27 @@ func (s *ListState) Visible() (first, last int) {
 		return 0, -1
 	}
 	return s.first, s.last
+}
+
+// SetKeyIndex supplies an authoritative lookup for Key, allowing a retained
+// item to move arbitrarily far without searching the collection. Pass nil to
+// restore the default nearby-key search. Missing keys must report false.
+func (s *ListState) SetKeyIndex(lookup func(any) (int, bool)) { s.keyIndex = lookup }
+
+// Requested returns the committed half-open overscan window and the rows
+// outside it retained for active input or an open popup. Pins never enlarge
+// the contiguous window. The returned slice belongs to the caller.
+func (s *ListState) Requested() (first, last int, pins []int) {
+	s.read = true
+	first, last = s.requestedFirst, s.requestedLast
+	if s.frame.e != nil {
+		for _, i := range s.interactionRows(s.frame.e, s.frame.n) {
+			if i < first || i >= last {
+				pins = append(pins, i)
+			}
+		}
+	}
+	return first, last, pins
 }
 
 // AtEnd reports whether the list showed its end in the last frame, as
@@ -528,24 +555,19 @@ func buildList(c *context, e, owner *node, s *ListState, n int, row func(i int),
 		e.Focusable()
 	}
 	a, first, last := s.plan(e, n)
+	s.buildPins = s.interactionRows(e, n)
 	e.Children(func() {
 		for i := first; i < last; i++ {
 			f.build(i)
 		}
-		// The row holding the focus stays out of view as well, with the
-		// text being edited in it; and the header of the section at the
-		// top is built where the others are.
-		focus, ok := s.focusedRow(e, n)
-		if ok && (focus < first || focus >= last) {
-			f.build(focus)
+		for _, i := range s.buildPins {
+			if i < first || i >= last {
+				f.build(i)
+			}
 		}
-		// So does the row a drag choosing rows began on, which holds the
-		// press as the list scrolls it away.
-		if d := &s.dragSel; d.on && d.from < n && (d.from < first || d.from >= last) && (!ok || d.from != focus) {
-			f.build(d.from)
-		}
+
 		if s.Header != nil && n > 0 {
-			if h := s.headerAbove(a, n); h >= 0 && (h < first || h >= last) && (!ok || h != focus) {
+			if h := s.headerAbove(a, n); h >= 0 && (h < first || h >= last) && !slices.Contains(s.buildPins, h) {
 				f.build(h)
 			}
 		}
@@ -564,6 +586,9 @@ func (s *ListState) sync(e *node, n int) {
 		s.header.row = -1
 	}
 	s.heights.def = float64(e.c.theme.Space(8))
+	if s.itemExtent > 0 {
+		s.heights.def = float64(s.itemExtent)
+	}
 	if s.Key != nil && n > 0 {
 		if k := s.anchorKey; k != nil {
 			if j, ok := s.find(k, s.anchor, n); ok && j != s.anchor {
@@ -648,6 +673,10 @@ func (s *ListState) anchorAt(y float64) (int, float64) {
 
 // find returns the row whose key is k, looking around row near.
 func (s *ListState) find(k any, near, n int) (int, bool) {
+	if s.keyIndex != nil {
+		i, ok := s.keyIndex(k)
+		return i, ok && i >= 0 && i < n && s.Key(i) == k
+	}
 	for d := 0; d <= listSearch; d++ {
 		lo, hi := near-d, near+d
 		if lo < 0 && hi >= n {
@@ -666,10 +695,18 @@ func (s *ListState) find(k any, near, n int) (int, bool) {
 // plan returns the row the place starts from and the rows to build, as far
 // as the heights known tell where the place puts them.
 func (s *ListState) plan(e *node, n int) (a, first, last int) {
+	// Tuned lists defer their first rows until actual local constraints are
+	// known; constructor-time window height is not their viewport height.
+	if !s.laidOut && (s.overscan != nil || s.itemExtent > 0) {
+		return 0, 0, 0
+	}
 	if n == 0 {
 		return 0, 0, 0
 	}
 	view := float64(e.st.h)
+	if proposed, ok := e.height.resolve(e.c.h); ok {
+		view = float64(proposed)
+	}
 	if view <= 0 {
 		view = float64(e.c.h)
 	}
@@ -683,7 +720,8 @@ func (s *ListState) plan(e *node, n int) (a, first, last int) {
 		}
 	case r.set && !r.end:
 		// Rows on both sides cover any alignment.
-		a, y, above = max(0, min(r.row, n-1)), 0, -view
+		a, y = max(0, min(r.row, n-1)), 0
+		above = -view + hs.height(a)
 	case r.end || s.follows():
 		a = n - 1
 		y = view - hs.height(a)
@@ -697,7 +735,7 @@ func (s *ListState) plan(e *node, n int) (a, first, last int) {
 		first--
 		yy -= hs.height(first) + gap
 	}
-	return a, max(0, first-listOverscan), min(n, last+listOverscan)
+	return a, max(0, first-s.overscanRows()), min(n, last+s.overscanRows())
 }
 
 // build builds row i in the list.
@@ -1349,6 +1387,87 @@ func (s *ListState) focusedRow(e *node, n int) (int, bool) {
 	return 0, false
 }
 
+// interactionRows follows real input and popup ownership back to this
+// list's previous row roots. A portal's anchor may be outside its parent chain.
+func (s *ListState) interactionRows(e *node, n int) []int {
+	rt := e.c.rt
+	rows := []int{}
+	add := func(id uint64) {
+		visited := map[uint64]bool{}
+		for id != 0 && id != e.id && !visited[id] {
+			visited[id] = true
+			st := rt.states[id]
+			if st == nil {
+				return
+			}
+			if r, ok := s.rows[id]; ok {
+				i, valid := r.row, true
+				if s.Key != nil && (i >= n || s.Key(i) != r.key) {
+					i, valid = s.find(r.key, i, n)
+				}
+				if valid && i >= 0 && i < n && !slices.Contains(rows, i) {
+					rows = append(rows, i)
+				}
+				return
+			}
+			if st.anchor != 0 {
+				id = st.anchor
+			} else {
+				id = st.parent
+			}
+		}
+	}
+	add(rt.focused)
+	if rt.pressed != nil {
+		add(rt.pressed.id)
+	}
+	if capture := rt.captureClicks; capture != nil && capture.held != 0 {
+		if st := rt.states[capture.pressID]; st != nil && st.born == capture.pressBorn {
+			add(capture.pressID)
+		}
+	}
+	add(rt.pressDragger)
+	if rt.drag != nil && !rt.drag.canceled {
+		add(rt.drag.src)
+	}
+	if s.dragSel.on {
+		add(s.dragSel.id)
+	}
+	add(rt.menu.asked)
+	add(rt.menu.later)
+	add(rt.menu.release)
+	add(rt.menu.chosen)
+	if rt.menu.pending != nil {
+		add(rt.menu.pending.id)
+	}
+	if rt.menu.active != nil {
+		add(rt.menu.active.id)
+	}
+	if rt.menu.drawn != nil {
+		add(rt.menu.drawn.id)
+	}
+	for _, st := range rt.states {
+		if st.anchor != 0 && st.seen+1 >= rt.frame {
+			add(st.anchor)
+		}
+	}
+	slices.Sort(rows)
+	return rows
+}
+
+func (s *ListState) rememberRequested(e *node, first, last int) {
+	pins := s.buildPins[:0:0]
+	for _, i := range s.buildPins {
+		if i < first || i >= last {
+			pins = append(pins, i)
+		}
+	}
+	if s.read && (first != s.requestedFirst || last != s.requestedLast || !slices.Equal(pins, s.requestedPins)) {
+		e.c.rt.animating = true
+	}
+	s.requestedFirst, s.requestedLast, s.requestedPins = first, last, pins
+}
+
 // layoutList measures and places the rows of a List w×h from its place,
 // building those missing, pins the header of the section at the top, and
 // sets the size of the content and the offset. Without rows, what else was
@@ -1386,6 +1505,7 @@ func (e *node) layoutList(w, h float32) {
 		e.contentW, e.contentH = float64(cw+e.padX()), float64(max(uh, max(h-e.padY(), 0))+e.padY())
 		layoutAbsolute(e)
 		e.scrollBase = 0
+		s.rememberRequested(e, 0, 0)
 		s.remember(e, 0, -1, true, st.scrollY)
 		return
 	}
@@ -1513,11 +1633,11 @@ func (e *node) layoutList(w, h float32) {
 		}
 	}
 	glide := s.glideToEnd(e, n, lo, hi, H, padTop+padBottom+hs.top(n, gap)-gap, func(d float64) { shift(d); cover() })
-	for k := 0; k < listOverscan && hi < n-1 && ensure(hi+1); k++ {
+	for k := 0; k < s.overscanRows() && hi < n-1 && ensure(hi+1); k++ {
 		yHi += ht(hi) + gap
 		hi++
 	}
-	for k := 0; k < listOverscan && lo > 0 && ensure(lo-1); k++ {
+	for k := 0; k < s.overscanRows() && lo > 0 && ensure(lo-1); k++ {
 		lo--
 		yLo -= ht(lo) + gap
 	}
@@ -1597,6 +1717,7 @@ func (e *node) layoutList(w, h float32) {
 	e.scrollBase = scroll
 	st.scrollTo(st.scrollX, scroll)
 	s.inset = inset
+	s.rememberRequested(e, lo, hi+1)
 	s.remember(e, first, last, hi == n-1 && end()-glide <= H+0.5, scroll)
 }
 

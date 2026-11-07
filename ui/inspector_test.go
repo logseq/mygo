@@ -35,6 +35,63 @@ func openInspector(tt *Tester) {
 	tt.Frame()
 }
 
+func TestInspectorInputIsolatedFromCapture(t *testing.T) {
+	var appField Handle
+	appText, prevent := "app content", false
+	var captured []InputKind
+	tt := NewTester(func(c *Context) {
+		c.CaptureInput(func(ev InputEvent, _ InputTarget) bool {
+			if prevent {
+				captured = append(captured, ev.Kind)
+			}
+			return prevent
+		})
+		TextInput(c, &appText).Bind(&appField).Label("Application field")
+		Text(c, "Capture marker")
+	}, 1000, 600)
+	tt.rt.insp.enabled = true
+	tt.Key(0, KeyF12)
+	if err := tt.Click("<Text>Capture marker</Text>"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(Cmd, KeyF)
+	tt.Type("needle")
+	if !tt.rt.insp.finding || tt.rt.insp.query != "needle" {
+		t.Fatal("precondition: inspector search must own text focus")
+	}
+	prevent = true
+	search := tt.rt.states[tt.rt.focused]
+	x, y := search.x+search.w/2, search.y+search.h/2
+	tt.ClickAt(x, y)
+	app, ok := tt.Find("Application field")
+	if !ok {
+		t.Fatal("application field is missing")
+	}
+	tt.Press(x, y)
+	tt.Move(app.X+app.W/2, app.Y+app.H/2)
+	tt.Release(app.X+app.W/2, app.Y+app.H/2)
+	tt.Scroll(x, y, 0, 3)
+	tt.Key(Cmd, KeyA)
+	tt.Type("replacement")
+	if tt.rt.insp.query != "replacement" {
+		t.Errorf("application capture prevented inspector replacement: %q", tt.rt.insp.query)
+	}
+	tt.Compose("marked", 3)
+	tt.Compose("", 0)
+	tt.Command("selectAll")
+	tt.Key(0, KeyBackspace)
+	if tt.rt.insp.query != "" || len(captured) != 0 {
+		t.Errorf("inspector input escaped to application capture: kinds=%v, query=%q", captured, tt.rt.insp.query)
+	}
+	captured = nil
+	appField.Focus()
+	tt.Frame()
+	tt.Type("blocked")
+	if len(captured) != 1 || captured[0] != InputText || appText != "app content" {
+		t.Fatalf("ordinary application capture/prevention changed: kinds=%v, text=%q", captured, appText)
+	}
+}
+
 func TestInspectorOpensAndCloses(t *testing.T) {
 	tt, width := inspected(func(c *context) {
 		coreColumn(c).Padding(20).Children(func() { coreText(c, "Hello") })

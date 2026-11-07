@@ -156,6 +156,8 @@ const (
 	//	})
 	RoleDeletion
 	RoleInsertion
+	// RoleTabPanel holds the content of the selected tab.
+	RoleTabPanel
 )
 
 // tabular reports whether elements of a role hold rows of cells: tables,
@@ -553,6 +555,8 @@ func (e *node) accessRole() (platform.AccessRole, bool) {
 		return platform.RoleDeletion, true
 	case RoleInsertion:
 		return platform.RoleInsertion, true
+	case RoleTabPanel:
+		return platform.RoleTabPanel, true
 	default:
 		return platform.AccessRole(e.role - RoleGroup), true
 	}
@@ -588,7 +592,7 @@ func cellRole(r platform.AccessRole) bool {
 // sort button, can be reached.
 func leafRole(r platform.AccessRole) bool {
 	switch r {
-	case platform.RoleGroup, platform.RoleList, platform.RoleScroll, platform.RoleDialog, platform.RoleAlertDialog, platform.RolePopup, platform.RoleStatus,
+	case platform.RoleTabPanel, platform.RoleGroup, platform.RoleList, platform.RoleScroll, platform.RoleDialog, platform.RoleAlertDialog, platform.RolePopup, platform.RoleStatus,
 		platform.RoleTabList, platform.RoleTable, platform.RoleRow, platform.RoleCell, platform.RoleColumnHeader, platform.RoleRowHeader, platform.RoleTree,
 		platform.RoleListItem, platform.RoleToolbar, platform.RoleRadioGroup, platform.RoleMenu, platform.RoleMenuBar, platform.RoleHeading, platform.RoleNavigation,
 		platform.RoleRegion, platform.RoleLog, platform.RoleTimer, platform.RoleAlert, platform.RoleSearch,

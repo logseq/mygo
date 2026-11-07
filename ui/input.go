@@ -108,7 +108,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.KeyPressed:
 		rt.modsChanged(Modifiers(ev.Mods))
 		rt.holdKey(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey))
-		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), KeyCode(ev.Code), ev.Repeat)
+		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), KeyCode(ev.Code), ev.Repeat, ev.Text, ev.BeforeContent)
 	case platform.ModifiersChanged:
 		rt.modsChanged(Modifiers(ev.Mods))
 	case platform.RawKeyPressed, platform.RawKeyReleased:
@@ -122,9 +122,14 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		}
 		delete(rt.byPosition, physical)
 		rt.releaseKey(key, physical)
-		rt.observeFocus(InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Code: KeyCode(ev.Code), Mods: Modifiers(ev.Mods)})
+		input := InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Code: KeyCode(ev.Code), Mods: Modifiers(ev.Mods), Text: ev.Text}
+		if rt.captureInput(input, rt.focused) {
+			taken = true
+			break
+		}
+		rt.observeFocus(input)
 		if h := rt.focusHandler(); h != nil {
-			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Code: KeyCode(ev.Code), Mods: Modifiers(ev.Mods)})
+			taken = rt.deliver(h, input)
 		}
 	case platform.TextInput:
 		rt.editEvent(rt.replaced(editEvent{kind: editInsert, text: ev.Text}, ev))
@@ -133,11 +138,24 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.SurfaceCommand:
 		rt.editEvent(editEvent{kind: editCommand, text: ev.Text, repeat: ev.Repeat})
 	case platform.SurfaceFocus:
+		if !rt.windowFocused {
+			rt.windowFocusEpoch++
+		}
 		rt.windowFocused = true
 		rt.blinkStart = rt.now()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
+		if rt.windowFocused {
+			rt.windowFocusEpoch++
+		}
+		rt.cancelCapturePointer()
+		if rt.pressed != nil && rt.pressed.capturedPointer {
+			rt.pointerCancel(rt.pressButton)
+		}
 		rt.windowFocused = false
+		if rt.captureClicks != nil {
+			rt.captureClicks.id = 0
+		}
 		rt.selection.dragging = false
 		// Keys let go of elsewhere never come back up here.
 		rt.modsChanged(0)
@@ -296,6 +314,10 @@ func (rt *engine) unhoverGone() bool {
 }
 
 func (rt *engine) pointerMove(x, y float32) {
+	if (x != rt.pointerX || y != rt.pointerY || !rt.pointerIn) && rt.capturePointer(InputEvent{Kind: InputPointerMove, Button: -1, Mods: rt.mods}, x, y) {
+		rt.pointerX, rt.pointerY, rt.pointerIn = x, y, true
+		return
+	}
 	if d := &rt.scrollDrag; d.st != nil {
 		s := d.st
 		g := d.bars(s.barWidth)
@@ -410,6 +432,19 @@ func (s *state) pointer(rt *engine) (x, y float32) {
 const interactive = flagClickable | flagFocusable | flagEditable | flagSelectable | flagDragWindow | flagDraggable | flagTrackPointer
 
 func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks int) {
+	if rt.pressed != nil && rt.pressed.capturedPointer {
+		if button != 0 {
+			ev := InputEvent{Kind: InputPointerDown, Button: button, Clicks: max(1, clicks), Mods: mods}
+			if !rt.capturePointer(ev, x, y) {
+				rt.deliver(rt.pressed, ev)
+			}
+			return
+		}
+		rt.pointerCancel(rt.pressButton)
+	}
+	if rt.capturePointer(InputEvent{Kind: InputPointerDown, Button: button, Clicks: max(1, clicks), Mods: mods}, x, y) {
+		return
+	}
 	rt.downing++
 	defer rt.endDown()
 	rt.observePointer(InputEvent{Kind: InputPointerDown, Button: button, Mods: mods, Clicks: max(clicks, 1)})
@@ -470,6 +505,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 	}
 	rt.requestFrame()
 	if target == nil {
+		if rt.captureClicks != nil {
+			rt.captureClicks.plain, rt.captureClicks.clicks = true, clicks
+		}
 		return
 	}
 	if button == 0 && target.flags&flagMenuButton != 0 && target.flags&flagDisabled == 0 {
@@ -558,6 +596,7 @@ func (rt *engine) pointerCancel(button int) {
 		rt.ups = append(rt.ups, pendingUp{button: button, canceled: true})
 		return
 	}
+	rt.cancelCapturePointer()
 	switch {
 	case rt.scrollDrag.st != nil:
 		button = 0
@@ -595,14 +634,27 @@ func (rt *engine) countPress(chain []uint64, target, h *state, n int) int {
 // committing what it would.
 func (rt *engine) pointerUp(button, clicks int, canceled bool) {
 	if rt.downing > 0 {
-		rt.ups = append(rt.ups, pendingUp{button: button, clicks: clicks})
+		rt.ups = append(rt.ups, pendingUp{button: button, clicks: clicks, canceled: canceled})
 		return
 	}
+	if !canceled && rt.capturePointer(InputEvent{Kind: InputPointerUp, Button: button, Clicks: max(1, clicks), Mods: rt.mods}, rt.pointerX, rt.pointerY) {
+		if rt.pressed == nil || button != rt.pressButton {
+			return
+		}
+		canceled = true
+	}
 	rt.observePointer(InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1), Canceled: canceled})
-	if button == rt.pressButton {
+	if rt.pressed != nil && button == rt.pressButton {
 		clicks = rt.pressClicks // the engine's, which may have started over
 	}
-	if s := rt.scrollDrag.st; s != nil {
+	if !canceled && button == 0 && button == rt.pressButton {
+		if s := rt.pressed; s != nil && s.flags&flagDisabled == 0 &&
+			rt.contains(s, Rect{s.x, s.y, s.w, s.h}, rt.pointerX, rt.pointerY) && !s.dragRec.dragged(rt, s) &&
+			rt.capturePointer(InputEvent{Kind: InputClick, Button: button, Clicks: max(1, clicks), Mods: rt.mods}, rt.pointerX, rt.pointerY) {
+			canceled = true
+		}
+	}
+	if s := rt.scrollDrag.st; s != nil && button == 0 {
 		rt.scrollDrag.st = nil
 		if s.snap != nil {
 			// Let go, it rests at the nearest place.
@@ -614,12 +666,26 @@ func (rt *engine) pointerUp(button, clicks int, canceled bool) {
 		rt.requestFrame()
 		return
 	}
-	if s := rt.pressed; s != nil && button == rt.pressButton {
-		if d := rt.drag; canceled && d != nil && !d.native {
-			// Given up, as with Escape: dropped nowhere, and not missed. A
-			// native drag's session has the pointer, and ends it.
+	if button == 1 && canceled && rt.menu.release != 0 {
+		rt.menu.release, rt.menu.releaseText = 0, 0
+	}
+	if canceled && rt.pressed != nil && button == rt.pressButton {
+		s := rt.pressed
+		if d := rt.drag; d != nil && !d.native {
 			d.canceled, d.over = true, 0
+			rt.dragEnd()
 		}
+		rt.selection.dragging = false
+		if s.editor != nil {
+			s.editor.release()
+		}
+		s.pressPending = false
+		x, y := s.local(rt.pointerX, rt.pointerY)
+		rt.endPress(s.input, x, y)
+		rt.setHover(rt.hitChain(rt.pointerX, rt.pointerY))
+		return
+	}
+	if s := rt.pressed; s != nil && button == rt.pressButton {
 		if rt.dragEnd() {
 			// A drag ended, dropping its value: no click.
 			rt.pressed = nil
@@ -631,26 +697,33 @@ func (rt *engine) pointerUp(button, clicks int, canceled bool) {
 			return
 		}
 	}
-	if p := rt.pressed; p != nil && p.input != nil {
-		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1), Canceled: canceled})
+	s := rt.pressed
+	releasing := s != nil && button == rt.pressButton
+	if releasing {
+		rt.pressed = nil
 	}
-	if button == 1 && canceled && rt.menu.release != 0 {
-		// The menu waiting for the release opens for none.
-		rt.menu.release, rt.menu.releaseText = 0, 0
+	if s != nil && s.input != nil {
+		rt.deliver(s, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1), Canceled: canceled})
+	}
+	if rt.closed || rt.closing {
 		return
 	}
 	if button == 1 && !canceled && rt.menuRelease() {
 		return
 	}
-	s := rt.pressed
-	if s == nil || button != rt.pressButton {
+	if s == nil {
+		if rt.releaseCapture != nil {
+			rt.releaseCapture(button)
+		}
+		return
+	}
+	if !releasing {
 		return
 	}
 	if rt.selection.dragging {
 		rt.moveTextSelection(rt.pointerX, rt.pointerY)
 		rt.selection.dragging = false
 	}
-	rt.pressed = nil
 	r := &s.releaseLater
 	r.due, r.x, r.y = true, rt.pointerX, rt.pointerY
 	// A press of the primary button that moved ends a drag; a click does
@@ -723,6 +796,9 @@ func (s *state) click(mods Modifiers) {
 }
 
 func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool) {
+	if rt.capturePointer(InputEvent{Kind: InputScroll, DX: dx, DY: dy, Mods: mods, Precise: precise, Momentum: momentum}, rt.pointerX, rt.pointerY) {
+		return
+	}
 	chain := rt.appendHitChain(rt.chain[:0], rt.pointerX, rt.pointerY)
 	rt.chain = chain[:0]
 	// From the innermost element out, the first handling its input to
@@ -945,13 +1021,13 @@ func (rt *engine) claimedBy(k keyEvent, window bool) bool {
 // keyDown handles a key pressed, and reports whether an element took it as
 // it came (HandleInput).
 func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
-	return rt.keyDownPhysical(mods, key, KeyUnknown, CodeUnknown, repeat)
+	return rt.keyDownPhysical(mods, key, KeyUnknown, CodeUnknown, repeat, "", nil)
 }
 
 // keyDownPhysical is keyDown with the key by position (InputEvent.PhysicalKey).
 // A chord of a key the layout does not type as a US key, as S on a Cyrillic
 // layout, matches shortcuts by that position; plain typing is untouched.
-func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCode, repeat bool) bool {
+func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCode, repeat bool, text string, beforeContent func() bool) bool {
 	if platform.KeyByPosition(platform.Key(key), platform.Key(physical), platform.Modifiers(mods)) {
 		if rt.byPosition == nil {
 			rt.byPosition = map[Key]bool{}
@@ -964,12 +1040,23 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 	if rt.inspectKey(mods, key) {
 		return true
 	}
-	rt.observeFocus(InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat})
+	input := InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat, Text: text}
+	if rt.captureInput(input, rt.focused) {
+		return true
+	}
+	if beforeContent != nil && beforeContent() {
+		return true
+	}
+	rt.observeFocus(input)
+	if key == KeyEscape && rt.pressed != nil && rt.pressed.capturedPointer {
+		rt.pointerCancel(rt.pressButton)
+		return true
+	}
 	k := keyEvent{mods, key, repeat}
 	if key == KeyEscape && mods == 0 && rt.dragCancel() {
 		return true
 	}
-	if h := rt.focusHandler(); h != nil && !rt.claimed(k) && rt.deliver(h, InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat}) {
+	if h := rt.focusHandler(); h != nil && !rt.claimed(k) && rt.deliver(h, input) {
 		rt.blinkStart = rt.now()
 		return true
 	}
@@ -992,6 +1079,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 		s.editor.queue = append(s.editor.queue, editEvent{kind: editKey, mods: mods, key: key})
 		rt.blinkStart = rt.now()
 		rt.requestFrame()
+		if typesText(k) {
+			return false // Native input methods still need to deliver TextInput.
+		}
 		// Taken: the menu item of the key, as Edit › Paste's Ctrl+V on
 		// Windows, leaves it rather than pasting a second time.
 		return true
@@ -1251,6 +1341,12 @@ func (rt *engine) shortcut(id uint64, mods Modifiers, key Key) bool {
 // editEvent delivers text, a composition or an edit command to the focus,
 // and reports whether an element took it.
 func (rt *engine) editEvent(ev editEvent) bool {
+	if rt.inputCapture != nil {
+		kind := map[editKind]InputKind{editInsert: InputText, editCompose: InputCompose, editCommand: InputCommand}[ev.kind]
+		if kind != 0 && rt.captureInput(InputEvent{Kind: kind, Text: ev.text, Caret: ev.caret, Mods: rt.mods}, rt.focused) {
+			return true
+		}
+	}
 	if rt.observers > 0 {
 		kind := InputText
 		if ev.kind == editCompose {

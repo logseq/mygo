@@ -409,6 +409,10 @@ type SurfaceEvent struct {
 	Repeat bool
 	Text   string
 	Caret  int
+	// BeforeContent runs synchronously for a key press after input capture and
+	// before ordinary content handling. It lets a native application-menu
+	// shortcut consume the key; edit-role shortcuts still follow the content.
+	BeforeContent func() bool
 	// Replace makes TextInput replace, and TextComposition compose over,
 	// the runes From to To of the last TextInputState.Text, instead of the
 	// selection.

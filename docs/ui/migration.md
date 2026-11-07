@@ -1,5 +1,234 @@
 # Migrating to checked elements
 
+## Programmatic context-menu opening
+
+`Element.OpenContextMenuAt(x, y)` requests the element's existing `ContextMenu`
+at window coordinates in DIPs. Call it before `ContextMenu` in the build that
+opens the menu, not every rebuild. Continue building `ContextMenu` and
+`OnMenuDismiss` so selection is delivered before dismissal, including when the
+user cancels. Disabled or expired elements cannot open a menu. Existing
+secondary-click and keyboard context-menu behavior is unchanged.
+
+```go
+owner := ui.Box(c)
+if requested {
+    requested = false
+    owner.OpenContextMenuAt(x, y)
+}
+owner.ContextMenu(buildMenu).OnMenuDismiss(closed)
+```
+
+## Build-time text flow query
+
+`Context.InTextFlow()` is an additive, read-only UI-thread query of the current
+build parent. It reports true inside a text element's `Children` callback and
+false outside an active build, including for a nil or closed context. The result
+is scoped to the current callback: do not cache it or infer it from a retained
+application tree. It does not change the rule that text accepts only text
+elements, such as `Text`, `Link` and `RichText`.
+
+Adapters that support both inline text and standalone layout can choose their
+primitive from the actual context, without changing link activation:
+
+```go
+var link ui.Element
+if c.InTextFlow() {
+    link = ui.Link(c, "", url)
+} else {
+    link = ui.LinkBase(c, url)
+}
+link.Children(func() { ui.Text(c, "Documentation") })
+```
+
+Keep arbitrary layout and icons on the standalone path. This query does not make
+non-text children legal inside text, expose retained nodes, or change wire APIs.
+Existing callers need no migration.
+
+## Final frame text-input geometry
+
+Full and repaint frames now publish the text-input caret after all `AfterFrame`
+callbacks finish. Custom `HandleTextInput` clients can acquire current
+`CommittedSpace` and `CommittedText` geometry in those callbacks; the final
+caret sent to the platform uses that geometry rather than the element-origin
+fallback queried before it was available. Geometry still expires at the next
+build, and closing a window from a callback prevents further publication.
+
+Non-frame input and client mutations still synchronize text input immediately.
+They can precede layout, so this does not guarantee zero transient fallback or
+qualify GUI or OS-specific IME positioning.
+
+## Captured pointer cancellation
+
+`Context.CaptureInput` now observes `InputPointerCancel` when an outstanding
+press loses native capture, including a down it prevented or a plain hit with
+no native pointer owner. An observed press also cancels on window blur; an
+owned `HandleCapturedPointer` gesture retains its existing cancellation paths.
+No frame or focus change is required for native capture loss to end a gesture.
+
+Cancellation first clears the old press and click candidate, then notifies
+capture, then the original native handler. Returning true cannot veto the
+native owner's cancellation. Reentrant cancellation or window closure cannot
+revive the old click candidate. A later real up cannot click that candidate;
+a fresh down retains the existing release/click recognition rules. Completed
+gestures do not receive a second cancellation from late capture-loss events.
+
+The cancellation target is the original committed hit, not a new hit under the
+pointer. If that identity has retired, the target is empty: all `Distance`
+queries return -1, but window-level cleanup must still run. Pointer coordinates
+remain in window DIPs. Legacy native handlers keep their existing synthetic
+release cleanup; capture receives cancellation, never that synthetic release.
+
+Handle cancellation before target filtering, discard previews and clear held
+buttons instead of committing them. Do not turn it into a release or a click:
+
+```go
+c.CaptureInput(func(ev ui.InputEvent, target ui.InputTarget) bool {
+    if ev.Kind == ui.InputPointerCancel {
+        cancelPointerGesture()
+        return false
+    }
+    return routeInput(ev, target)
+})
+```
+
+This changes no surface event, focus epoch, composition protocol or wire schema.
+It is a synchronous runtime contract, not a claim of GUI or OS IME acceptance.
+
+## Window focus lifecycle
+
+`Context.WindowFocusEpoch()` is an additive, UI-thread query of the window's
+focus lifecycle, valid between builds and inside `CaptureInput`. Its nonzero
+revision advances immediately when the real surface changes between focused
+and blurred. Duplicate notifications do not advance it. A blur/refocus round
+trip therefore changes the revision even if no render occurs. Nil contexts
+and closed windows return zero.
+
+The private frame builder and its Elements remain valid only during a view
+build. This read-only query uses the stable public `Context` described in
+`ui/frame.go`; it does not extend any frame-owned lifetime. For capture-time
+checks, query the public context used to register the currently installed
+`CaptureInput` callback, inside that callback. Keep only the revision value
+as session ownership, not a render-time revision snapshot or an old callback's
+frame data. `CaptureInput` supplies an event and target, not a new context.
+
+Applications retaining input-session ownership must capture this revision
+when a session begins and compare it at event dispatch, alongside their
+retained client identity and `Handle.Focused(c)`. Do not cache the revision
+only during render: that misses a new session beginning before the next frame.
+
+```go
+// On the UI thread, inside the window's capture callback:
+if owner.client != currentClient || owner.epoch != c.WindowFocusEpoch() || !handle.Focused(c) {
+    clearOwner()
+}
+if startsSession && handle.Focused(c) {
+    owner.client = currentClient
+    owner.epoch = c.WindowFocusEpoch()
+}
+```
+
+Revisions are scoped to one window/context, not globally unique client IDs.
+They do not replace retained-node identity checks or track movement between
+controls in a focused window. No event fields, input-consumption behavior,
+composition phases, timers or render barriers change. This is a native-event
+lifecycle contract, not a claim of real OS IME acceptance.
+
+## Code editor committed changes
+
+`editor.State.OnChange func(text string)` now reports each completed editing
+operation synchronously, after text and selections have updated. Typing,
+paste/cut, commands, undo/redo and `State.Insert`/`State.Run` notify once when
+the resulting text differs. Multiple buffer edits within one operation (such
+as typing with automatic indentation) produce one notification. Selection-only
+operations and direct `Buffer.Set`, `Buffer.Reset`, `Buffer.Edit`, `Buffer.Undo`
+or `Buffer.Redo` do not notify. Use `State.Run(editor.Undo)`/`Redo` when those
+actions should publish an edit.
+
+IME marked text is editor-local preedit: it does not call `OnChange`.
+`State.Composing()` is true until `ReplaceText` commits it, `UnmarkText` accepts
+it, or the composition is removed. The commit reports the final document once,
+even if it equals the last preedit text. Repeated `UnmarkText` does not notify
+again. A composition that leaves the committed document unchanged does not
+notify. This is an event contract, not an OS-specific IME acceptance claim.
+Native end-before-commit adapters now use the mandatory composition phases
+below. `EndComposition` hides marking without accepting preedit; `Composing()`
+remains true until final replacement, explicit acceptance or cancellation.
+
+Replace frame-by-frame comparisons of `Buffer.String()` with `OnChange` when
+saving documents. Keep `OnInput` for pre-default key routing only; do not save
+from it or from marked-text updates. For authoritative external values, call
+`State.SetTextFromModel(text)` on the UI thread. It cancels pending composition,
+replaces differing text and clears its undo history without calling `OnChange`;
+unmodified text retains its history. Model echoes of the current document need
+no replacement. Applications choose whether to defer external updates while
+`Composing()` or while a query draft is focused.
+
+```go
+state.OnChange = func(text string) { sendDocumentEdit(text) }
+if modelChanged && !state.Composing() && state.Buffer.String() != modelText {
+    state.SetTextFromModel(modelText)
+}
+editor.View(c, &state)
+```
+
+The editor callback and state methods are opt-in. Direct buffer mutations retain
+their existing behavior; use `SetTextFromModel` for controlled model replacement,
+not a direct buffer edit during local composition.
+
+## Text input composition phases
+
+This is a source-breaking change to custom `ui.TextInputClient` implementations:
+add mandatory `EndComposition()` and `CancelComposition()` methods. There is no
+optional interface or legacy fallback. Built-in widgets, code/richtext editors
+and the text-input example implement the same phases. The internal
+`platform.TextInputClient` also requires typed `CancelComposition()` so native
+cancellation can roll back rather than accept the transaction; no optional
+fallback or new surface method is used.
+
+- `SetMarkedText` starts/updates pending preedit and remembers the original text
+  and selection for cancellation. Do not publish a committed document from it.
+- `EndComposition` clears marking (`MarkedRange` becomes false), but retains the
+  pending text, replacement range and original state. It must not notify a save
+  or accept callback. Repeated end is harmless.
+- `ReplaceText` applies the final replacement and publishes one committed edit.
+  The native end-before-commit helper retains its UTF-16 replacement range and
+  client identity; it drops a pending replacement directed at a different client.
+- `UnmarkText` is explicit acceptance, including macOS native unmark. It accepts
+  current pending text once. Repeated acceptance does not publish again.
+- `CancelComposition` restores only unfinished preedit's original text and
+  selection, clears marking/pending state and publishes no committed edit.
+  It must be idempotent and must not undo an already committed edit.
+
+The UI adapter calls `CancelComposition` on release: focus loss, disposal, runtime
+close and client replacement. Ordinary focus loss is not acceptance. A native
+`ReplaceText` or explicit `UnmarkText` received before release remains committed;
+a later release is a no-op for it. Old native client adapters reject callbacks
+after replacement and cannot edit the new client. The platform continues to
+reset its pending replacement range when its native client is reset.
+
+For a custom string client, keep `pending` separate from visible `marked` status:
+
+```go
+// SetMarkedText must first retain beforeText/beforeSelection for a new preedit.
+func (c *Client) EndComposition() { c.marked = false }
+func (c *Client) CancelComposition() {
+    if !c.pending { return }
+    c.text, c.selection = c.beforeText, c.beforeSelection
+    c.marked, c.pending = false, false
+}
+func (c *Client) UnmarkText() {
+    if !c.pending { return }
+    c.marked, c.pending = false, false
+    c.publishCommitted(c.text)
+}
+```
+
+For a virtual-preedit client, acceptance inserts its virtual text before
+publishing; cancellation removes it and restores any selection it replaced.
+The code editor also discards the cancelled preedit's undo/redo transaction.
+These contracts are covered by deterministic native-order and editor tests,
+not a claim of real OS IME or Web/native product parity.
+
 Native UI views receive `*ui.Context`, child builders use `func()` callbacks,
 and widget constructors return `ui.Element` values. This guide covers source
 migration, build lifetimes, persistent control identity and focus bindings.
@@ -95,6 +324,29 @@ from several model fields. Review these bindings manually after running the
 codemod; it cannot infer how to write a derived value back to your model.
 
 ## Persistent identity
+
+### Committed text geometry
+
+The compatibility fork integrates upstream through
+`1db4e93bd48efa7e3f5a93985c8e89a4c6fa9e3d`. Upstream's `TextLine` belongs to
+`TextLayout`: its offsets count UTF-16 and its `Rect` is layout-local. The
+fork's committed handle observations use the distinct `CommittedTextLine`:
+node-relative rune offsets and window-DIP `Bounds`, valid only for the
+committed identity and frame.
+
+```go
+// Before: var lines []ui.TextLine // the fork's former committed result
+var lines []ui.CommittedTextLine
+if geometry, ok := handle.TextGeometry(c); ok {
+    lines, ok = geometry.Lines()
+    _ = lines
+    _ = ok
+}
+```
+
+Inferred `lines, ok := geometry.Lines()` calls need no source change. Do not
+alias either type or reinterpret its ranges/coordinates. `ScrollOffset(c)`
+continues returning `(x, y float32, ok bool)`.
 
 Store `ui.Handle` instead of an element:
 

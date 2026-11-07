@@ -301,6 +301,7 @@ var (
 	gtkWidgetSetNoShowAll               func(w ptr, v bool)
 	gtkWidgetSetVisible                 func(w ptr, v bool)
 	gtkWidgetMnemonicActivate           func(w ptr, groupCycling bool) bool
+	gtkImageNewFromPixbuf               func(pixbuf ptr) ptr
 	gtkBoxNew                           func(orientation int32, spacing int32) ptr
 	gtkBoxPackStart                     func(box, child ptr, expand, fill bool, padding uint32)
 	gtkBoxReorderChild                  func(box, child ptr, pos int32)
@@ -742,6 +743,7 @@ func load() error {
 	mustBind(t, &gtkWidgetSetNoShowAll, "gtk_widget_set_no_show_all")
 	mustBind(t, &gtkWidgetSetVisible, "gtk_widget_set_visible")
 	mustBind(t, &gtkWidgetMnemonicActivate, "gtk_widget_mnemonic_activate")
+	mustBind(t, &gtkImageNewFromPixbuf, "gtk_image_new_from_pixbuf")
 	mustBind(t, &gtkBoxNew, "gtk_box_new")
 	mustBind(t, &gtkBoxPackStart, "gtk_box_pack_start")
 	mustBind(t, &gtkBoxReorderChild, "gtk_box_reorder_child")

@@ -38,3 +38,4 @@ func (in *inspector) paintHighlight(*engine, *Painter, float32)       {}
 func (rt *engine) toggleInspector()                                   {}
 func (rt *engine) inspectKey(Modifiers, Key) bool                     { return false }
 func (rt *engine) buildInspector(*context, float32, float32, float32) {}
+func (in *inspector) ownsInput(*engine, InputEvent, uint64) bool      { return false }

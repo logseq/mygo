@@ -2448,6 +2448,26 @@ Recent (about 290 KB).
 
 ## Native UI (`ui`)
 
+The compatibility fork integrates upstream through
+`1db4e93bd48efa7e3f5a93985c8e89a4c6fa9e3d`; [LUI-FORK.md](../LUI-FORK.md)
+describes its reusable extensions and source adaptations. Upstream `TextLayout`
+and `TextLine` retain layout-local geometry and UTF-16 ranges. The separate
+`CommittedText.Lines()` result is `[]CommittedTextLine`, with node-relative rune
+ranges and window-DIP `Bounds`, invalidated with its committed handle/frame.
+Explicit annotations using the fork's old `[]TextLine` name must be renamed;
+inferred callers need no change. `Handle.ScrollOffset(c)` remains
+`(x, y float32, ok bool)`.
+
+`Element.HandleCapturedPointer` opts a primary pointer handler into an owned
+gesture. An accepted down receives movement and release outside the element;
+Escape, window deactivation, native capture loss, removal, disablement and close
+end it with `InputPointerCancel`, never a successful release or click. Discard
+transient state on cancellation and commit it only on `InputPointerUp`.
+`HandleInput` retains its legacy synthetic release on window deactivation;
+existing text and IME handlers do not opt into this contract. Install one input
+handler per element. Surface backends report capture loss as `PointerCancel`;
+Windows sends a real release before relinquishing its own native capture.
+
 The public API keeps one stable `*Context` per window. Child builders share
 it and temporarily change its parent. `Element` is a 16-byte checked value:
 a direct owner record, arena slot and 32-bit generation. The owner detaches
@@ -2461,6 +2481,26 @@ use; production methods return empty results or ignore it. `Handle` stores
 persistent control identity separately for each window. Focus queries read
 identity without depending on construction order; focus requests wait for a
 hidden control. `Services` offers persistent clipboard, URL and redraw access.
+
+Handle identities are finalized from the actual committed tree after layout,
+including children built by `Fitting` and virtual lists. `AfterFrame` can read
+their `Bounds` and `FocusWithin` without replaying input, actions or focus
+requests. Omitted bindings lose their identity even when a same-key element
+continues or is recreated; isolated measurement probes never publish bindings
+to the real window.
+
+`Context.NativeMenuOpen(owner)` reads the native menu presentation state for
+one committed handle, including a menu queued by the committed frame before
+the host presents it. It becomes false on selection or cancellation without
+waiting for `OnMenuDismiss`. Native menu builders also run to deliver a chosen
+item, so builder execution alone does not mean that a menu remains open. This
+query does not change input behavior or observe retained in-window popovers.
+
+`Handle.ScrollOffset(c)` reads the actual committed offset of any bound scroll
+host, including an ordinary `Box.ScrollAxes` without `TrackScroll`. Its axes
+match `ScrollState`. A non-scroller, hidden or expired binding returns
+`ok == false`, not an invented zero offset. Unapplied `ScrollState` requests
+remain distinct from committed position; no scrolling commands are changed.
 
 Constructors build and style controls eagerly. `Context.Key` supplies an ID
 before state initialization. A control takes its input as the public
@@ -3332,8 +3372,12 @@ either.
   `TextInputClient` to the same platform services. A stable, focus-checked
   adapter supplies absolute UTF-16 text ranges, selection, marked text,
   mutation callbacks, range geometry and hit testing. It is invalidated on
-  replacement/disposal, and focus changes unmark the old client and reset
-  native composition. Revealing the element, as the focus does, scrolls
+  replacement/disposal. Focus loss and release cancel unfinished preedit through
+  mandatory typed `CancelComposition`, restoring committed text and selection.
+  `EndComposition` only hides marking while retaining the pending transaction;
+  `UnmarkText` explicitly accepts it. Native end-before-commit helpers retain
+  UTF-16 ranges and client identity, resetting them before mutation, and retired
+  adapters reject callbacks. Revealing the element, as the focus does, scrolls
   to the client's caret (`clientCaret`), not the element's box, which a
   code editor as high as its lines makes as tall as the file. GTK and
   IMM32 use bounded surrounding context while
@@ -3975,8 +4019,15 @@ either.
   wait for the next frame, which the first changed, as a Down and an
   Enter typed quickly into a menu, the Enter choosing the item the Down
   highlighted. Each element
-  built at the top of `Overlay` notes the focus as it opens (`openers`),
-  which pruning gives back once it is gone with the focus that was in it.
+  built at the top of `Overlay` notes the focus as it opens (`openers`).
+  After collecting the committed focus order, before `arrangeFocus` and
+  pruning, return targets follow retired overlay owners only, stopping at
+  a live owner. A closing overlay gives focus back to a focusable opener
+  compatible with the remaining modal, without replacing live focus
+  elsewhere. Outside presses record their overlay owners until the final
+  commit, across rebuild passes. Only retired owners on one return chain
+  can restore cleared focus; a query without closure restores nothing.
+  The frame consumes these candidates, including on an early exit.
   An element attached to another (`AttachTo`, which `PopoverBase` and the
   popups of selects and comboboxes use) is that element's popover
   (`Element.popover`, and `state.anchor` once committed): its layout
@@ -4676,6 +4727,11 @@ either.
   stands for the family of GTK's `gtk-font-name` first
   (`platform.Theme.UIFont`, which package ui gives `SetUIFamily` with each
   change of the appearance).
+  Linux text needs Pango 1.48 or later. Its fontmap substitution hook
+  removes fontconfig's global `color=true` preference, which can otherwise
+  put an emoji fallback ahead of the requested text faces for bare digits.
+  Pango still itemizes emoji with the `emoji` family, preserving color
+  glyphs and variation, keycap, ZWJ and flag sequences.
 - **Atlas lifetime.** A mask drawn for the first time goes to the
   transient zone at the bottom of the atlas, which the next frame frees,
   and moves to the lasting zone at the top once another frame draws it, so

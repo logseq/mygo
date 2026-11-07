@@ -105,7 +105,7 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 	column, icons := false, false
 	for _, it := range m.Items {
 		column = column || it.Visible && (it.Type == platform.MenuItemCheckbox || it.Type == platform.MenuItemRadio || it.Checked)
-		icons = icons || it.Visible && it.Icon != nil && it.Type != platform.MenuItemSeparator
+		icons = icons || it.Visible && (it.Icon != nil || len(it.ImagePNG) != 0) && it.Type != platform.MenuItemSeparator
 	}
 	// The items of a menu bar show no icons; Windows 10 draws those of its
 	// menus' as bitmaps.
@@ -114,11 +114,11 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 	if icons && !drawn {
 		tint = b.menuTextColor()
 	}
-	bitmap := func(it *platform.MenuItem, item uint32, byPosition bool) uintptr {
-		if !icons || drawn || it.Icon == nil {
+	bitmap := func(ic *platform.MenuIcon, item uint32, byPosition bool) uintptr {
+		if !icons || drawn || ic == nil {
 			return 0
 		}
-		bmp := b.menus.addBitmap(owner, it.Icon, dpi, tint)
+		bmp := b.menus.addBitmap(owner, ic, dpi, tint)
 		if bmp != 0 {
 			setItemBitmap(h, item, byPosition, bmp)
 		}
@@ -149,17 +149,18 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 		if !it.Enabled {
 			flags |= mfGrayed
 		}
+		icon := menuItemIcon(it)
 		if it.Submenu != nil {
 			sub := b.buildMenu(it.Submenu, false, owner, accels, dpi)
 			procAppendMenuW.Call(h, flags|mfPopup, sub, uintptr(unsafe.Pointer(u16(menuLabel(it)))))
-			bitmap(it, uint32(pos), true)
-			look(&menuLook{label: menuLabel(it), submenu: true, icon: it.Icon})
+			bitmap(icon, uint32(pos), true)
+			look(&menuLook{label: menuLabel(it), submenu: true, icon: icon})
 			continue
 		}
 		if it.Checked {
 			flags |= mfChecked
 		}
-		e := &menuEntry{uid: it.ID, role: it.Role, owner: owner, menu: h, radio: it.Type == platform.MenuItemRadio, disabled: !it.Enabled, icon: it.Icon, native: it.Native}
+		e := &menuEntry{uid: it.ID, role: it.Role, owner: owner, menu: h, radio: it.Type == platform.MenuItemRadio, disabled: !it.Enabled, icon: icon, native: it.Native}
 		if !bar {
 			e.dpi = dpi
 		}
@@ -180,8 +181,8 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 			}
 		}
 		procAppendMenuW.Call(h, flags, uintptr(cmd), uintptr(unsafe.Pointer(u16(label))))
-		e.bmp = bitmap(it, uint32(cmd), false)
-		e.look = look(&menuLook{label: menuLabel(it), accel: e.accel, radio: e.radio, icon: it.Icon})
+		e.bmp = bitmap(icon, uint32(cmd), false)
+		e.look = look(&menuLook{label: menuLabel(it), accel: e.accel, radio: e.radio, icon: icon})
 		if e.radio && e.look == nil {
 			setItemInfo(h, cmd, label, it.Enabled, it.Checked, true, false)
 		}
@@ -190,6 +191,16 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 		looks[0].first, looks[len(looks)-1].last = true, true
 	}
 	return h
+}
+
+func menuItemIcon(it *platform.MenuItem) *platform.MenuIcon {
+	if it.Icon != nil {
+		return it.Icon
+	}
+	if len(it.ImagePNG) != 0 {
+		return &platform.MenuIcon{PNG: append([]byte(nil), it.ImagePNG...)}
+	}
+	return nil
 }
 
 func setItemInfo(menu uintptr, cmd uint16, label string, enabled, checked, radio, drawn bool) {
@@ -355,20 +366,21 @@ func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 		if e.accel != "" {
 			label += "\t" + e.accel
 		}
+		icon := menuItemIcon(it)
 		if e.look != nil {
-			e.look.label, e.look.icon = menuLabel(it), it.Icon
-			if it.Icon != nil && !e.look.icons {
+			e.look.label, e.look.icon = menuLabel(it), icon
+			if icon != nil && !e.look.icons {
 				b.menus.iconColumn(e.menu)
 			}
-		} else if it.Icon != e.icon && e.dpi != 0 {
+		} else if icon != e.icon && e.dpi != 0 {
 			b.menus.freeBitmap(e.bmp)
 			e.bmp = 0
-			if it.Icon != nil {
-				e.bmp = b.menus.addBitmap(e.owner, it.Icon, e.dpi, b.menuTextColor())
+			if icon != nil {
+				e.bmp = b.menus.addBitmap(e.owner, icon, e.dpi, b.menuTextColor())
 			}
 			setItemBitmap(e.menu, uint32(cmd), false, e.bmp)
 		}
-		e.icon, e.disabled = it.Icon, !it.Enabled
+		e.icon, e.disabled = icon, !it.Enabled
 		setItemInfo(e.menu, cmd, label, it.Enabled, it.Checked, e.radio, e.look != nil)
 	}
 	for _, w := range b.windows {
@@ -493,10 +505,11 @@ func jsString(s string) string {
 func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.Point) {
 	owner := b.appHwnd
 	w, _ := pw.(*window)
-	if w != nil && !w.closed {
+	if w != nil && w.closed {
+		return
+	}
+	if w != nil {
 		owner = w.hwnd
-	} else {
-		w = nil
 	}
 	id := b.menus.newOwner()
 	defer b.menus.drop(id)

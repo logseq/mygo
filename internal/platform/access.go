@@ -235,6 +235,8 @@ const (
 	// ARIA's deletion and insertion, HTML's del and ins.
 	RoleDeletion
 	RoleInsertion
+	// RoleTabPanel holds the content associated with a tab.
+	RoleTabPanel
 )
 
 // Tabular reports whether nodes of a role hold rows of cells: tables,

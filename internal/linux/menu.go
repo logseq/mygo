@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type nativeItem struct {
 	icon         *platform.MenuIcon
 	image, label ptr
 	bar          bool // an item of a menu bar, which shows no icon
+	imagePNG     []byte
 }
 
 var (
@@ -257,11 +259,8 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int, bar bool) 
 	}
 	applyState(item, it, check)
 	n := nativeItem{owner: owner, item: item, check: check, windowID: windowID, disabled: !it.Enabled, bar: bar}
-	if it.Icon != nil && it.Type != platform.MenuItemSeparator && !bar && setMenuItemIcon != nil {
-		n.icon = it.Icon
-		if windowID != 0 {
-			setMenuItemIcon(&n, it.Icon) // a tray's once its menu is exported
-		}
+	if it.Type != platform.MenuItemSeparator && !bar {
+		updateMenuItemImage(&n, it, true)
 	}
 	itemsByID[it.ID] = append(itemsByID[it.ID], n)
 	return item
@@ -435,17 +434,35 @@ func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
 		n := &itemsByID[it.ID][i]
 		if it.Type != platform.MenuItemSeparator {
 			if n.label != 0 {
-				gtkLabelSetLabel(n.label, cs(it.LabelWithSubtitle()))
+				loadMenuAccess()
+				menuLabelSetText(n.label, cs(it.LabelWithSubtitle()))
 			} else {
 				gtkMenuItemSetLabel(n.item, cs(it.LabelWithSubtitle()))
 			}
-			if it.Icon != n.icon && !n.bar && setMenuItemIcon != nil {
-				n.icon = it.Icon
-				setMenuItemIcon(n, it.Icon)
+			if !n.bar {
+				updateMenuItemImage(n, it, false)
 			}
 		}
 		applyState(n.item, it, n.check)
 		n.disabled = !it.Enabled
+	}
+}
+
+func updateMenuItemImage(n *nativeItem, it *platform.MenuItem, building bool) {
+	if it.Icon != nil {
+		if (it.Icon != n.icon || len(n.imagePNG) != 0) && setMenuItemIcon != nil && (!building || n.windowID != 0) {
+			setMenuItemIcon(n, it.Icon)
+		}
+		n.icon, n.imagePNG = it.Icon, nil
+	} else if n.icon != nil || !bytes.Equal(n.imagePNG, it.ImagePNG) {
+		if n.icon != nil && setMenuItemIcon != nil {
+			setMenuItemIcon(n, nil)
+		}
+		n.icon = nil
+		setLegacyMenuItemImage(n, it.ImagePNG)
+	}
+	if n.label != 0 {
+		nameMenuItem(n.item, it.LabelWithSubtitle())
 	}
 }
 
@@ -477,8 +494,10 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	// GTK positions menus relative to a window: the given one, else the
 	// active one.
 	w, _ := pw.(*window)
-	if w == nil || w.closed {
-		w = nil
+	if pw != nil && (w == nil || w.closed) {
+		return
+	}
+	if w == nil {
 		for _, x := range b.windows {
 			if !x.closed && gtkWindowIsActive(x.win) {
 				w = x
@@ -529,8 +548,9 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	gMainLoopRun(loop)
 	b.quitLoops = b.quitLoops[:len(b.quitLoops)-1]
 	b.popups = b.popups[:len(b.popups)-1]
-	gMainLoopUnref(loop)
+	// Destroy can emit deactivate again; its callback still owns this loop.
 	gtkWidgetDestroy(menu)
+	gMainLoopUnref(loop)
 }
 
 // Tray icons use AppIndicator (StatusNotifierItem), which shows a menu on

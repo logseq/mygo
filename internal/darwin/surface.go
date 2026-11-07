@@ -249,7 +249,7 @@ func (b *Backend) watchCommandKeyUps() {
 		if s == nil {
 			return ev
 		}
-		s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods})
+		s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods, Text: typedChars(stringOf(send(ev, "characters")))})
 		return 0
 	})
 	commandKeyUps = retain(send(class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", mask, uintptr(blk)))
@@ -257,6 +257,7 @@ func (b *Backend) watchCommandKeyUps() {
 
 func (s *surface) destroy() {
 	s.CancelDataDrag()
+	s.cancelTextInput()
 	if s.link != 0 {
 		send(s.link, "invalidate")
 		release(s.link)
@@ -755,20 +756,23 @@ func (s *surface) SetCursor(c platform.Cursor) {
 }
 
 func (s *surface) SetTextInput(t platform.TextInputState) {
-	if s.input.Client != t.Client && s.input.Active {
-		s.discardComposition()
-	}
-	if s.input.Active && t.Active && t.NoInputMethod && !s.input.NoInputMethod {
-		// Input methods turned off give up what they composed.
-		s.discardComposition()
-	}
-	if s.input.Active && !t.Active && s.marked != "" {
-		s.discardComposition()
-	}
 	moved := t.Active != s.input.Active || t.Caret != s.input.Caret
+	if s.input.Active && (s.input.Client != t.Client || !t.Active || t.NoInputMethod && !s.input.NoInputMethod) {
+		s.cancelTextInput()
+	}
 	s.input = t
 	if t.Active && moved {
 		send(send(s.view, "inputContext"), "invalidateCharacterCoordinates")
+	}
+}
+
+func (s *surface) cancelTextInput() {
+	client := s.input.Client
+	s.input.Client, s.input.Active = nil, false
+	s.withheld = nil
+	s.discardComposition()
+	if client != nil {
+		client.CancelComposition()
 	}
 }
 
@@ -786,6 +790,9 @@ func (w *window) surfaceKeyChanged(key bool) {
 		kind = platform.SurfaceFocus
 	}
 	s.send(platform.SurfaceEvent{Kind: kind})
+	if !key {
+		s.cancelTextInput()
+	}
 }
 
 func (s *surface) send(ev platform.SurfaceEvent) bool {
@@ -1256,6 +1263,7 @@ func registerSurfaceClass() {
 		method("resignFirstResponder", func(self id, _ objc.SEL) bool {
 			if s := b().surfaceOf(self); s != nil {
 				s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
+				s.cancelTextInput()
 			}
 			return true
 		}),
@@ -1337,10 +1345,10 @@ func registerSurfaceClass() {
 			// composition up, as GTK's and IMM32's filtering keeps them on
 			// Linux and Windows, unless the input method passes it on
 			// (doCommandBySelector:).
-			key := platform.SurfaceEvent{Kind: platform.KeyPressed, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods, Repeat: sendBool(ev, "isARepeat")}
+			key := platform.SurfaceEvent{Kind: platform.KeyPressed, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: mods, Repeat: sendBool(ev, "isARepeat"), Text: typedChars(stringOf(send(ev, "characters")))}
 			withheld := ime && s.hasMarkedText()
-			if !withheld {
-				s.send(key)
+			if !withheld && s.send(key) {
+				return
 			}
 			// Input methods see the key while a text input has the focus;
 			// they answer with insertText: or setMarkedText:.
@@ -1373,7 +1381,7 @@ func registerSurfaceClass() {
 		}),
 		method("keyUp:", func(self id, _ objc.SEL, ev id) {
 			if s := b().surfaceOf(self); s != nil {
-				s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: eventMods(ev)})
+				s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: eventKey(ev), PhysicalKey: physicalKey(ev), Code: eventKeyCode(ev), Mods: eventMods(ev), Text: typedChars(stringOf(send(ev, "characters")))})
 			}
 		}),
 		method("flagsChanged:", func(self id, _ objc.SEL, ev id) {

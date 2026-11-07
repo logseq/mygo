@@ -416,7 +416,7 @@ func TestPopups() [][]string {
 		labels := []string{}
 		list := gtkContainerGetChildren(m)
 		for node := list; node != 0; node = field[ptr](node, 8) {
-			label := goStr(gtkMenuItemGetLabel(field[ptr](node, 0)))
+			label := menuItemText(field[ptr](node, 0))
 			if label == "" {
 				label = "-"
 			}

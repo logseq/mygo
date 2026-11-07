@@ -46,8 +46,9 @@ const (
 
 // length is a size in DIPs, a percentage of the parent's or automatic.
 type length struct {
-	v float32
-	u unit
+	v      float32
+	u      unit
+	offset float32
 }
 
 // Auto is an automatic margin, which takes the free space on its side, as
@@ -57,14 +58,15 @@ var Auto = float32(math.Inf(1))
 
 func isAuto(v float32) bool { return math.IsInf(float64(v), 1) }
 
-func px(v float32) length      { return length{v, unitPx} }
-func percent(v float32) length { return length{v, unitPercent} }
+func px(v float32) length      { return length{v: v, u: unitPx} }
+func percent(v float32) length { return length{v: v, u: unitPercent} }
 
 // bound is a minimum or a maximum size, in DIPs, by a percentage of the
 // parent's, or by both, as CSS's max-width: min(78%, 34rem): the larger
 // of two minimums applies, and the smaller of two maximums.
 type bound struct {
 	px, pct float32
+	offset  float32
 	set     uint8 // boundPx, boundPct
 }
 
@@ -74,7 +76,7 @@ const (
 )
 
 func (b *bound) setPx(v float32)  { b.px, b.set = v, b.set|boundPx }
-func (b *bound) setPct(p float32) { b.pct, b.set = p, b.set|boundPct }
+func (b *bound) setPct(p float32) { b.pct, b.offset, b.set = p, 0, b.set|boundPct }
 
 // lower and upper return a minimum and a maximum in DIPs against base,
 // and false when none applies: a percentage applies only against a known
@@ -96,7 +98,7 @@ func (b bound) upper(base float32) (float32, bool) {
 func (b bound) resolve(base float32, larger bool) (float32, bool) {
 	v, ok := b.px, b.set&boundPx != 0
 	if b.set&boundPct != 0 && base >= 0 {
-		p := b.pct / 100 * base
+		p := b.pct/100*base + b.offset
 		switch {
 		case !ok:
 			v, ok = p, true
@@ -117,7 +119,7 @@ func (l length) resolve(base float32) (float32, bool) {
 		return l.v, true
 	case unitPercent:
 		if base >= 0 {
-			return l.v / 100 * base, true
+			return l.v/100*base + l.offset, true
 		}
 	}
 	return 0, false
@@ -332,19 +334,25 @@ type layoutStyle struct {
 // Common input queries return false or zero for nil or cleared elements;
 // this does not make references to reused storage safe.
 type node struct {
-	epoch      uint64
-	key        any
-	valueInput func(*node)
-	c          *context
-	id         uint64
-	flags      uint32
-	parent     *node
-	first      *node
-	last       *node
-	next       *node
-	nchild     int
-	depth      int
-	st         *state
+	disabledOpacity *float32
+
+	fitting *fittingBuilder
+
+	epoch         uint64
+	key           any
+	valueInput    func(*node)
+	c             *context
+	id            uint64
+	flags         uint32
+	pointerEvents int8
+	committed     bool
+	parent        *node
+	first         *node
+	last          *node
+	next          *node
+	nchild        int
+	depth         int
+	st            *state
 	// track is the ScrollState of a scroll container (TrackScroll).
 	track *ScrollState
 
@@ -552,14 +560,17 @@ type node struct {
 	// keepScrollbars are the element's Scrollbars and KeepScrollbars, and
 	// barsFrom the element whose they are instead, as a table's for the
 	// list of its rows.
-	popover        *node
-	list           *listFrame
-	listRow        bool
-	hideScrollbars bool
-	keepScrollbars bool
-	barsFrom       *node
-	rowIndex       int
-	rowsOf         *listFrame
+	popover          *node
+	popoverHandle    *Handle
+	collisionPadding *float32
+	matchAnchorWidth bool
+	list             *listFrame
+	listRow          bool
+	hideScrollbars   bool
+	keepScrollbars   bool
+	barsFrom         *node
+	rowIndex         int
+	rowsOf           *listFrame
 	// snap is how the element, a scroll container, snaps (ScrollSnap), and
 	// snapAlign how the element lines up with the container around it
 	// that does (SnapAlign): Start, Center or End plus one, horizontally

@@ -33,6 +33,8 @@ type TextInputClient interface {
 	MarkedRange() (TextRange, bool)
 	ReplaceText(*TextRange, string)
 	SetMarkedText(*TextRange, string, TextRange)
+	EndComposition()
+	CancelComposition()
 	UnmarkText()
 	BoundsForRange(TextRange) (RectF, TextRange, bool)
 	IndexForPoint(x, y float64) (int, bool)
@@ -40,31 +42,34 @@ type TextInputClient interface {
 
 // InputComposition preserves the native end-preedit/commit ordering without
 // owning text. Some input methods unmark before delivering their result.
-type InputComposition struct{ pending *TextRange }
+type InputComposition struct {
+	pending *TextRange
+	client  TextInputClient
+}
 
-func (c *InputComposition) Reset() { c.pending = nil }
+func (c *InputComposition) Reset() { c.pending, c.client = nil, nil }
 func (c *InputComposition) End(client TextInputClient) {
 	if r, ok := client.MarkedRange(); ok {
-		c.pending = &r
+		c.pending, c.client = &r, client
 	}
-	client.UnmarkText()
+	client.EndComposition()
 }
 
-// Cancel discards the marked text, for an input method that gives its
-// composition up without emptying it first. The rest of the document,
-// the selection included, stays as it is.
+// Cancel discards unaccepted preedit, restoring the client's committed text
+// and selection without accepting a replacement.
 func (c *InputComposition) Cancel(client TextInputClient) {
-	c.pending = nil
-	if _, ok := client.MarkedRange(); ok {
-		client.SetMarkedText(nil, "", TextRange{})
-		client.UnmarkText()
-	}
+	c.Reset()
+	client.CancelComposition()
 }
 func (c *InputComposition) Replace(client TextInputClient, r *TextRange, text string) {
+	if c.client != nil && c.client != client {
+		c.Reset()
+		return
+	}
 	if r == nil && c.pending != nil {
 		r = c.pending
 	}
-	c.pending = nil
+	c.Reset()
 	client.ReplaceText(r, text)
 }
 

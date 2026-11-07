@@ -352,6 +352,7 @@ func loadAccessNames() {
 		platform.RoleGrid: {"table"}, platform.RoleTreeGrid: {"tree table", "table"},
 		// Content removed and added (ATK 2.34), as Chromium's del and ins.
 		platform.RoleDeletion: {"content deletion", "panel"}, platform.RoleInsertion: {"content insertion", "panel"},
+		platform.RoleTabPanel: {"panel"},
 	} {
 		atkRoles[r] = role(names...)
 	}

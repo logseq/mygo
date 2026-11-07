@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"time"
+	"unicode"
 	"unicode/utf16"
 	"unsafe"
 
@@ -30,6 +31,9 @@ var (
 	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	procGetDoubleClickTime    = user32.NewProc("GetDoubleClickTime")
 	procGetMessageTime        = user32.NewProc("GetMessageTime")
+	procGetKeyboardState      = user32.NewProc("GetKeyboardState")
+	procGetKeyboardLayout     = user32.NewProc("GetKeyboardLayout")
+	procToUnicodeEx           = user32.NewProc("ToUnicodeEx")
 	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
 	procSetDIBitsToDevice     = gdi32.NewProc("SetDIBitsToDevice")
 	procImmGetContext         = imm32.NewProc("ImmGetContext")
@@ -906,41 +910,37 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		if modifierKey(wp) {
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: modifiers})
 		}
-		if s.menuShortcut(wp, false) {
-			return 0, true
-		}
-		rawTaken := false
 		k, physical, ok := keyAndPosition(wp, lp, false, modifiers)
+		beforeContent := func() bool { return s.menuShortcut(wp, false) }
 		if ok {
-			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers, Repeat: lp&(1<<30) != 0})
+			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers, Repeat: lp&(1<<30) != 0, Text: keyText(wp, lp), BeforeContent: beforeContent})
 		} else {
-			rawTaken = s.rawKey(platform.RawKeyPressed, wp, lp, physical, modifiers)
-			s.keyTaken = rawTaken
+			s.keyTaken = s.rawKey(platform.RawKeyPressed, wp, lp, physical, modifiers, beforeContent)
 		}
 		if !s.keyTaken && s.menuShortcut(wp, true) {
 			return 0, true
 		}
 		// Alt+F4, Alt+Space and F10 keep working, and Alt the menu bar, unless
 		// the content took it as a key of its own.
-		return 0, m == wmKeyDown || rawTaken
+		return 0, m == wmKeyDown || s.keyTaken
 	case wmKeyUp, wmSysKeyUp:
 		modifiers := mods()
 		if modifierKey(wp) {
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: modifiers})
 		}
-		rawTaken := false
+		taken := false
 		k, physical, ok := keyAndPosition(wp, lp, true, modifiers)
 		if ok {
-			s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers})
+			taken = s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers, Text: keyText(wp, lp)})
 		} else if wp == vkProcessKey && lp&(1<<24) == 0 {
 			// The input method took the release of a key the content got
 			// pressed, as it began composing while the key was held: the
 			// key goes up all the same, by its position.
 			s.held.Lift(platform.KeyUnknown, platform.KeyForScancode(uint16(lp>>16&0xFF)), modifiers, s.send)
 		} else {
-			rawTaken = s.rawKey(platform.RawKeyReleased, wp, lp, physical, modifiers)
+			taken = s.rawKey(platform.RawKeyReleased, wp, lp, physical, modifiers, nil)
 		}
-		return 0, m == wmKeyUp || rawTaken
+		return 0, m == wmKeyUp || taken
 	case wmSysChar:
 		if s.menuRan {
 			return 0, true
@@ -956,7 +956,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			return 0, true
 		}
 	case wmChar:
-		if s.menuRan {
+		if s.menuRan || s.keyTaken {
 			return 0, true
 		}
 		c := uint16(wp)
@@ -1060,6 +1060,32 @@ func wheelLines() int {
 	return surfaceWheelLines
 }
 
+// keyText queries the current layout without changing the keyboard buffer
+// used by TranslateMessage (dead keys, Alt+numpad and WM_CHAR).
+func keyText(vk, lp uintptr) string {
+	// ToUnicodeEx's non-mutating flag requires Windows 10 version 1607.
+	if windowsBuild() < 14393 {
+		return ""
+	}
+	var state [256]byte
+	if ok, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); ok == 0 {
+		return ""
+	}
+	layout, _, _ := procGetKeyboardLayout.Call(0)
+	var chars [16]uint16
+	n, _, _ := procToUnicodeEx.Call(vk, lp>>16&0xFF, uintptr(unsafe.Pointer(&state[0])), uintptr(unsafe.Pointer(&chars[0])), uintptr(len(chars)), 4, layout)
+	if int32(n) <= 0 || n > uintptr(len(chars)) {
+		return "" // Dead keys and keys without a printable translation.
+	}
+	text := string(utf16.Decode(chars[:n]))
+	for _, r := range text {
+		if !unicode.IsPrint(r) {
+			return ""
+		}
+	}
+	return text
+}
+
 // keyCode returns the key by position of a WM_KEYDOWN or WM_KEYUP, from its
 // scancode: CodeUnknown for what an input method (VK_PROCESSKEY) or injected
 // Unicode text (VK_PACKET) keeps from the application, and for a key the
@@ -1074,12 +1100,12 @@ func keyCode(vk, lp uintptr) platform.KeyCode {
 // rawKey sends a key shortcuts have no name for, which keyAndPosition leaves
 // out, by its position, and reports whether the content took it. kind is
 // RawKeyPressed or RawKeyReleased.
-func (s *surface) rawKey(kind platform.SurfaceEventKind, wp, lp uintptr, physical platform.Key, modifiers platform.Modifiers) bool {
+func (s *surface) rawKey(kind platform.SurfaceEventKind, wp, lp uintptr, physical platform.Key, modifiers platform.Modifiers, beforeContent func() bool) bool {
 	code := keyCode(wp, lp)
 	if code == platform.CodeUnknown {
 		return false
 	}
-	return s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: modifiers, Repeat: kind == platform.RawKeyPressed && lp&(1<<30) != 0})
+	return s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: modifiers, Repeat: kind == platform.RawKeyPressed && lp&(1<<30) != 0, Text: keyText(wp, lp), BeforeContent: beforeContent})
 }
 
 // keyAndPosition returns the key of a WM_KEYDOWN or WM_KEYUP by virtual

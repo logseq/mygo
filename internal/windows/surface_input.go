@@ -54,7 +54,10 @@ func (s *surface) imeRequest(wp, lp uintptr) uintptr {
 		*rs = reconvertString{Size: size, StrLen: uint32(len(units)), StrOffset: head,
 			CompStrLen: uint32(end - start), CompStrOffset: uint32(start) * 2,
 			TargetStrLen: uint32(end - start), TargetStrOffset: uint32(start) * 2}
-		copy(unsafe.Slice((*uint16)(unsafe.Add(native(lp), head)), len(units)), units)
+		// An empty document has no payload allocation beyond its header.
+		if len(units) != 0 {
+			copy(unsafe.Slice((*uint16)(unsafe.Add(native(lp), head)), len(units)), units)
+		}
 		return uintptr(size)
 	case imrConfirmReconvertString:
 		rs := (*reconvertString)(native(lp))

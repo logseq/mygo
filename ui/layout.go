@@ -383,6 +383,9 @@ func (e *node) forgetIntrinsic() {
 // measureIntrinsic measures the max-content or min-content width of an
 // element sized by its content.
 func measureIntrinsic(e *node, maxContent bool) float32 {
+	if e.fitting != nil {
+		return e.fitting.ideal(-1).W + e.padX()
+	}
 	var w float32
 	switch {
 	case e.kind != kindBox:
@@ -515,6 +518,9 @@ func naturalHeight(e *node, w, cbH float32) float32 {
 // contentHeight returns the height the content takes in a content box cw
 // wide.
 func contentHeight(e *node, cw float32) float32 {
+	if e.fitting != nil {
+		return e.fitting.ideal(cw).H
+	}
 	switch e.kind {
 	case kindText:
 		return e.textLayout(max(cw, 1)).Height
@@ -593,6 +599,9 @@ func computeBox(e *node, w, h float32) {
 		return
 	case kindImage, kindIcon:
 		return
+	}
+	if e.fitting != nil {
+		e.fitting.build(cw, ch)
 	}
 	if e.list != nil {
 		e.layoutList(w, h)
@@ -1209,6 +1218,17 @@ func layoutAbsolute(e *node) {
 			// Copies of elements leaving are placed by their transitions.
 			continue
 		}
+		if c.popoverHandle != nil {
+			c.popover = c.c.rt.public.Resolve(*c.popoverHandle).node()
+			if c.popover == nil {
+				c.flags |= flagInvisible
+				c.w, c.h = 0, 0
+				continue
+			}
+			if c.dir&dirSet == 0 {
+				c.setDir(c.popover.rtl(), false)
+			}
+		}
 		if c.attach != 0 {
 			if c.popover != nil && c.popover.inHidden() {
 				// Nowhere to attach to: it hides with its target.
@@ -1284,9 +1304,12 @@ func layoutAbsolute(e *node) {
 // attachTo places c, a child of e whose padding box is pw×ph, attached to
 // a point of the box of the element it is a popover of (AttachTo).
 func attachTo(c, e *node, pw, ph float32) {
+	t := laidOutVisualBox(c.popover)
 	var w float32
 	if v, ok := c.width.resolve(pw); ok {
 		w = c.clampW(v, pw)
+	} else if c.matchAnchorWidth {
+		w = c.clampW(t.W, pw)
 	} else {
 		w = fitWidth(c, pw, pw)
 	}
@@ -1296,7 +1319,11 @@ func attachTo(c, e *node, pw, ph float32) {
 	} else {
 		h = heightAt(c, w, ph)
 	}
-	t := laidOutVisualBox(c.popover)
+	if c.collisionPadding != nil {
+		edge := c.windowEdge()
+		w = min(w, max(0, c.c.w-2*edge))
+		h = min(h, max(0, c.c.h-2*edge))
+	}
 	if c.flags&flagScrollY != 0 {
 		_, ay, _, sy := c.attachFractions()
 		h = min(h, roomAlong(t.Y, t.H, beside(ay, sy), c.m(0)+c.m(2), c.c.h, c.windowEdge()))
@@ -1333,6 +1360,10 @@ func attachedAt(c, e *node, t Rect, pw, ph, w, h float32) (x, y float32) {
 	edge := c.windowEdge()
 	x, fx := alongTarget(t.X, t.W, ax, sx, w, c.m(3)-c.m(1), c.c.w, edge)
 	y, fy := alongTarget(t.Y, t.H, ay, sy, h, c.m(0)-c.m(2), c.c.h, edge)
+	if c.collisionPadding != nil {
+		x = max(edge, min(x, c.c.w-edge-w))
+		y = max(edge, min(y, c.c.h-edge-h))
+	}
 	c.placed, c.flips = c.attach.flipped(fx, fy), 0
 	if fx {
 		c.flips |= flipAcross
@@ -1373,6 +1404,9 @@ const windowMargin = 4
 
 // windowEdge returns how far AttachTo keeps c from the window's edges.
 func (c *node) windowEdge() float32 {
+	if c.collisionPadding != nil {
+		return *c.collisionPadding
+	}
 	if c.edgeMarginSet {
 		return c.edgeMargin
 	}

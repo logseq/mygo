@@ -2,11 +2,84 @@ package editor
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestOnChangeReportsCommittedOperations(t *testing.T) {
+	ct := newEditorTest(t, "", "|")
+	var changes []string
+	ct.st.OnChange = func(value string) { changes = append(changes, value) }
+	ct.tt.Frame()
+	want := func(values ...string) {
+		t.Helper()
+		if !slices.Equal(changes, values) {
+			t.Fatalf("committed changes = %q, want %q", changes, values)
+		}
+	}
+	ct.typ("a")
+	want("a")
+	ed := &ct.st.ed
+	ed.SetMarkedText(nil, "n", ui.TextInputRange{Start: 1, End: 1})
+	ed.SetMarkedText(nil, "ni", ui.TextInputRange{Start: 2, End: 2})
+	want("a")
+	if !ct.st.Composing() {
+		t.Fatal("preedit was not exposed as composing")
+	}
+	ed.EndComposition()
+	want("a")
+	if _, marked := ed.MarkedRange(); marked || !ct.st.Composing() {
+		t.Fatal("native end accepted rather than hid pending preedit")
+	}
+	ed.ReplaceText(nil, "你😀")
+	want("a", "a你😀")
+	if ct.st.Composing() {
+		t.Fatal("commit left a composition active")
+	}
+	ed.SetMarkedText(nil, "中", ui.TextInputRange{Start: 1, End: 1})
+	ed.UnmarkText()
+	ed.UnmarkText()
+	want("a", "a你😀", "a你😀中")
+	ct.tt.SetFocused(false)
+	want("a", "a你😀", "a你😀中")
+	if ct.st.Buffer.String() != "a你😀中" {
+		t.Fatal("release rolled back accepted input")
+	}
+	ct.tt.SetFocused(true)
+	ed.SetMarkedText(nil, "cancel", ui.TextInputRange{Start: 6, End: 6})
+	ed.EndComposition()
+	ct.tt.SetFocused(false)
+	want("a", "a你😀", "a你😀中")
+	if ct.st.Buffer.String() != "a你😀中" || ct.st.Composing() {
+		t.Fatal("release retained unconfirmed preedit")
+	}
+	ct.tt.SetFocused(true)
+	ct.st.Run(Undo)
+	want("a", "a你😀", "a你😀中", "a你😀")
+	ct.st.Run(Redo)
+	want("a", "a你😀", "a你😀中", "a你😀", "a你😀中")
+	ed.SetMarkedText(nil, "draft", ui.TextInputRange{Start: 5, End: 5})
+	ct.st.SetTextFromModel("remote")
+	ed.UnmarkText()
+	want("a", "a你😀", "a你😀中", "a你😀", "a你😀中")
+	if ct.st.Composing() || ct.st.Buffer.String() != "remote" {
+		t.Fatal("model replacement retained preedit")
+	}
+	ct.st.ReadOnly = true
+	ct.tt.Frame()
+	ct.typ("x")
+	want("a", "a你😀", "a你😀中", "a你😀", "a你😀中")
+	ct.st.ReadOnly = false
+	ct.st.Buffer.SetLanguage(LanguageNamed("javascript"))
+	ct.st.SetTextFromModel("if (a) {\n    ")
+	ct.st.Select(ct.st.Buffer.Snapshot().Len(), ct.st.Buffer.Snapshot().Len())
+	ct.tt.Frame()
+	ct.typ("}")
+	want("a", "a你😀", "a你😀中", "a你😀", "a你😀中", "if (a) {\n}")
+}
 
 // OnInput sees keys and typed text before the editor: what it takes the
 // editor leaves, the rest goes on as without it.

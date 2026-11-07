@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -776,6 +777,15 @@ func (s *surface) typed(event ptr) {
 	s.commit(string(r))
 }
 
+// keyvalText is layout glyph metadata, not an input-method text commit.
+func keyvalText(keyval uint32) string {
+	r := rune(gdkKeyvalToUnicode(keyval))
+	if !unicode.IsPrint(r) {
+		return ""
+	}
+	return string(r)
+}
+
 // commit sends text typed or committed by an input method.
 func (s *surface) commit(text string) {
 	if c := s.input.Client; c != nil {
@@ -1019,9 +1029,14 @@ func (s *surface) keyEvent(event ptr) bool {
 		}
 		s.lastKey = gdkEventCopy(event)
 	}
+	taken := false
 	if s.rawInput() {
 		if kind == platform.KeyPressed {
-			defer s.typed(event)
+			defer func() {
+				if !taken && !s.w.closed {
+					s.typed(event)
+				}
+			}()
 		}
 	} else if s.textInput && gtkIMContextFilterKeypress(s.im, event) {
 		if kind == platform.KeyReleased {
@@ -1030,7 +1045,10 @@ func (s *surface) keyEvent(event ptr) bool {
 			// the key was held: the key goes up all the same. One it
 			// hands back, as IBus and Fcitx do the keys they leave,
 			// comes again, which held keeps from the content.
-			s.held.Lift(keyvalKey(field[uint32](event, 28)), eventPhysicalKey(event), gdkMods(field[uint32](event, 24)), s.send)
+			s.held.Lift(keyvalKey(field[uint32](event, 28)), eventPhysicalKey(event), gdkMods(field[uint32](event, 24)), func(ev platform.SurfaceEvent) bool {
+				ev.Text = keyvalText(field[uint32](event, 28))
+				return s.send(ev)
+			})
 		}
 		return true
 	}
@@ -1045,7 +1063,8 @@ func (s *surface) keyEvent(event ptr) bool {
 			state &^= bit
 		}
 		s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: state})
-		return s.rawKey(kind, event, state, repeat)
+		taken = s.rawKey(kind, event, state, repeat)
+		return taken
 	}
 	k := keyvalKey(field[uint32](event, 28))
 	mods := gdkMods(field[uint32](event, 24))
@@ -1058,17 +1077,18 @@ func (s *surface) keyEvent(event ptr) bool {
 	if k == platform.KeyUnknown {
 		switch {
 		case kind == platform.KeyReleased && physical != platform.KeyUnknown:
-			s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: mods})
-			return false
+			taken = s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: mods, Text: keyvalText(field[uint32](event, 28))})
+			return taken
 		case !platform.KeyByPosition(k, physical, mods):
-			return s.rawKey(kind, event, mods, repeat)
+			taken = s.rawKey(kind, event, mods, repeat)
+			return taken
 		}
 	}
 	if kind == platform.KeyPressed {
 		s.pressing = event
 		defer func() { s.pressing = 0 }()
 	}
-	s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat})
+	taken = s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat, Text: keyvalText(field[uint32](event, 28))})
 	return true
 }
 
@@ -1084,7 +1104,7 @@ func (s *surface) rawKey(kind platform.SurfaceEventKind, event ptr, mods platfor
 	if kind == platform.KeyReleased {
 		raw = platform.RawKeyReleased
 	}
-	return s.send(platform.SurfaceEvent{Kind: raw, PhysicalKey: eventPhysicalKey(event), Code: code, Mods: mods, Repeat: repeat})
+	return s.send(platform.SurfaceEvent{Kind: raw, PhysicalKey: eventPhysicalKey(event), Code: code, Mods: mods, Repeat: repeat, Text: keyvalText(field[uint32](event, 28))})
 }
 
 func (b *Backend) surfaceOf(data ptr) *surface {
@@ -1363,9 +1383,11 @@ func initSurfaceCallbacks() {
 	})
 	cbSurfaceFocusOut = purego.NewCallback(func(widget, event, data ptr) bool {
 		if s := b().surfaceOf(data); s != nil {
-			gtkIMContextFocusOut(s.im)
 			s.down.clear()
 			s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
+			if s.im != 0 {
+				gtkIMContextFocusOut(s.im)
+			}
 		}
 		return false
 	})

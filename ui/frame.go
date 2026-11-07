@@ -6,6 +6,9 @@ import "fmt"
 
 // Context is the window's stable UI context. Use it on the UI thread while
 // building a view. Children share it and temporarily change its parent.
+// It may be retained for explicitly documented UI-thread handle queries,
+// such as Handle.TextSnapshot, between builds. This does not permit building
+// UI or retaining Elements in event callbacks.
 // Publish background results with Window.Update or Services.Invalidate.
 type Context struct {
 	rt       *engine
@@ -36,6 +39,13 @@ func (c *Context) build() *context {
 
 // Valid reports whether this context is building a view.
 func (c *Context) Valid() bool { return c.build() != nil }
+
+// InTextFlow reports whether children built now must be text elements.
+// Call it on the UI thread. It returns false outside an active build.
+func (c *Context) InTextFlow() bool {
+	ctx := c.build()
+	return ctx != nil && ctx.parent != nil && ctx.parent.kind == kindText
+}
 
 // Invalidate requests a frame from any goroutine.
 func (c *Context) Invalidate() {

@@ -144,16 +144,109 @@ func (rt *engine) openOverlay(back *node) {
 
 // restoreFocus gives the focus back to the element that had it as an
 // overlay opened, once the overlay is gone with the focus that was in it.
-func (rt *engine) restoreFocus() {
-	for id, opener := range rt.openers {
-		if rt.states[id] != nil {
-			continue
+func (rt *engine) restoreFocus(previousModal uint64) {
+	outside := rt.outsideFocus
+	rt.outsideFocus = rt.outsideFocus[:0]
+	if len(rt.openers) == 0 {
+		return
+	}
+	live := func(id uint64) bool {
+		s := rt.states[id]
+		return s != nil && s.seen == rt.frame && s.pass == rt.pass
+	}
+	owner := func(id uint64) uint64 {
+		for n := len(rt.states); id != 0 && n > 0; n-- {
+			if _, ok := rt.openers[id]; ok {
+				return id
+			}
+			s := rt.states[id]
+			if s == nil {
+				break
+			}
+			id = s.parent
 		}
-		delete(rt.openers, id)
-		if rt.states[rt.focused] == nil && rt.states[opener] != nil {
-			rt.focused = opener
+		return 0
+	}
+	onReturnChain := func(id, target uint64) bool {
+		for n := len(rt.openers); id != 0 && n > 0; n-- {
+			if id == target {
+				return true
+			}
+			if live(id) {
+				break
+			}
+			id = owner(rt.openers[id])
+		}
+		return false
+	}
+	resolve := func(id uint64) uint64 {
+		for n := len(rt.openers); id != 0 && n >= 0; n-- {
+			if live(id) {
+				if slices.Contains(rt.focusOrder, id) {
+					return id
+				}
+				return 0
+			}
+			o := owner(id)
+			if o == 0 || live(o) {
+				break
+			}
+			id = rt.openers[o]
+		}
+		return 0
+	}
+	// Read every return chain before changing the map or recycling states.
+	type focusReturn struct{ overlay, target uint64 }
+	returns := make([]focusReturn, 0, len(rt.openers))
+	for id, opener := range rt.openers {
+		if !live(opener) {
+			opener = resolve(opener)
+		}
+		returns = append(returns, focusReturn{id, opener})
+	}
+	focused := rt.focused
+	if !live(focused) {
+		focused = 0
+		o := owner(rt.focused)
+		if rt.focused == 0 {
+			// Outside presses and modal backdrops can clear focus before closing.
+			candidates := append(outside, owner(previousModal))
+			ambiguous := false
+			for i, id := range candidates {
+				if id == 0 || live(id) {
+					continue
+				}
+				for _, other := range candidates[:i] {
+					if other != 0 && !live(other) &&
+						!onReturnChain(id, other) && !onReturnChain(other, id) {
+						ambiguous = true
+					}
+				}
+				if o == 0 || onReturnChain(o, id) {
+					o = id
+				}
+			}
+			if ambiguous {
+				o = 0
+			}
+		}
+		if o != 0 && !live(o) {
+			focused = resolve(rt.openers[o])
+			// Future return owners may be outside the current modal; only
+			// an immediate restoration must stay in the remaining one.
+			if rt.modal != 0 && rt.scopeOf(focused) != rt.modal {
+				focused = 0
+			}
 		}
 	}
+	for _, r := range returns {
+		if live(r.overlay) {
+			rt.openers[r.overlay] = r.target
+		} else {
+			delete(rt.openers, r.overlay)
+		}
+	}
+	rt.focused = focused
 }
 
 // insideModal reports whether the elements being built are in the dialog
@@ -220,6 +313,14 @@ func (e *node) PressedOutside() bool {
 	if rt.pressedWithin(rt.downs[len(rt.downs)-1], e) {
 		return false
 	}
+	for p := e; p != nil; p = p.parent {
+		if _, ok := rt.openers[p.id]; ok {
+			if !slices.Contains(rt.outsideFocus, p.id) {
+				rt.outsideFocus = append(rt.outsideFocus, p.id)
+			}
+			break
+		}
+	}
 	rt.consumed = true
 	return true
 }
@@ -242,6 +343,10 @@ func (rt *engine) pressedWithin(id uint64, e *node) bool {
 	var anchor uint64
 	if e.popover != nil {
 		anchor = e.popover.id
+	} else if e.popoverHandle != nil {
+		if binding := e.popoverHandle.binding(rt, false); binding != nil && !binding.closed {
+			anchor = binding.id
+		}
 	}
 	s := rt.states[id]
 	for range 1000 { // against cycles of anchors

@@ -190,13 +190,14 @@ func (ref menuRef) is(it *MenuItem) bool {
 // MenuItem is an item of a Menu. Its methods set it up and return it, for
 // chaining, and Chosen reports the choice.
 type MenuItem struct {
-	run      *menuRun
-	seq      int
-	label    string
-	key      string
-	disabled bool
-	sub      bool
-	p        *platform.MenuItem // when the menu opens
+	run       *menuRun
+	seq       int
+	label     string
+	key       string
+	disabled  bool
+	sub       bool
+	p         *platform.MenuItem // when the menu opens
+	imageIcon *platform.MenuIcon
 	// What a menu drawn in the window shows of it beyond p (Danger,
 	// Trailing, Content).
 	danger   bool
@@ -567,7 +568,9 @@ type menuState struct {
 	// goes up, as on Windows, on the text releaseText.
 	release, releaseText uint64
 	pending              *shownMenu
+	active               *shownMenu
 	chosen               uint64
+	dismissed            uint64
 	choice               int
 	label, chosenKey     string
 	// later is the menu button whose menu the view asked for, as a
@@ -820,6 +823,7 @@ func (rt *engine) showMenu() {
 		return
 	}
 	rt.menu.pending = nil
+	rt.menu.active = p
 	z := rt.zoomFactor()
 	rt.host.popupMenu(p.menu, p.x*z, p.y*z, func(id int) { rt.menuChosen(p, id) })
 }
@@ -828,6 +832,11 @@ func (rt *engine) showMenu() {
 // reports it to ContextMenu's function, or the text input does the
 // command.
 func (rt *engine) menuChosen(p *shownMenu, id int) {
+	if rt.menu.active == p {
+		rt.menu.active = nil
+	}
+	rt.menu.dismissed = p.id
+	rt.requestFrame()
 	if id < 1 || id > len(p.labels) {
 		return
 	}

@@ -103,6 +103,8 @@ type host interface {
 // the view function, lays them out, paints them and routes input to the
 // elements of the last frame. Main thread only, except where noted.
 type engine struct {
+	afterFrame []func()
+
 	// inlineRects is placeInline's scratch, kept from frame to frame.
 	inlineRects []text.Rect
 	// byPosition holds the keys whose press stood for its physical key
@@ -110,6 +112,7 @@ type engine struct {
 	byPosition      map[Key]bool
 	owner           weak.Pointer[engine]
 	epoch           uint64
+	committedEpoch  uint64
 	parts           []any
 	public          *Context
 	arena           *elementOwner
@@ -123,7 +126,9 @@ type engine struct {
 	notices         []*state
 	typedInputs     []*state
 	focusFields     map[any]*focusField
-	refs            []*refState
+	refs            []weak.Pointer[refState]
+	boundRefs       []*refState
+	commitRefs      func(*engine)
 	actions         []action
 	textInputClosed bool
 	view            func(*context)
@@ -246,11 +251,15 @@ type engine struct {
 	// openers are the elements that had the focus as overlays opened, by
 	// overlay; downs the elements the pointer went down on since the last
 	// pass (0 for none), for PressedOutside.
-	openers   map[uint64]uint64
-	downs     []uint64
-	regs      []shortcutReg
-	nextRegs  []shortcutReg
-	delivered []shortcutReg
+	openers map[uint64]uint64
+	// outsideFocus records overlay owners reported by PressedOutside this frame.
+	outsideFocus []uint64
+	// restoreOverlayFocus is linked only by views that open overlays.
+	restoreOverlayFocus func(*engine, uint64)
+	downs               []uint64
+	regs                []shortcutReg
+	nextRegs            []shortcutReg
+	delivered           []shortcutReg
 	// shortcutRepeat tells that the last key a shortcut took this frame
 	// came as the auto-repeat of a key held down (ShortcutRepeated).
 	shortcutRepeat bool
@@ -307,6 +316,11 @@ type engine struct {
 	frameAt time.Time
 
 	pointerX, pointerY float32
+	inputCapture       func(InputEvent, InputTarget) bool
+	captureClicks      *inputCaptureState
+	releaseCapture     func(button int)
+	captureSerial      uint64
+	capturing          uint64
 	pointerIn          bool
 	// pointerType and pressure are the device of the last pointer event
 	// and how hard it pressed (InputEvent.Pressure), buttons the buttons
@@ -370,6 +384,7 @@ type engine struct {
 	// windowFocus reads; focusRead, that the last frame read it, so that a
 	// change of it draws a frame.
 	windowFocused, focusRead bool
+	windowFocusEpoch         uint64
 	// activeRead tells that the last frame read whether the window is
 	// drawn as active (windowActive), so that a change of it draws a
 	// frame.
@@ -600,7 +615,7 @@ type keyEvent struct {
 }
 
 func newRuntime(view func(*context), h host) *engine {
-	rt := &engine{view: view, host: h, text: textSystem(), states: map[uint64]*state{}, windowFocused: true}
+	rt := &engine{view: view, host: h, text: textSystem(), states: map[uint64]*state{}, windowFocused: true, windowFocusEpoch: 1}
 	rt.c.rt = rt
 	rt.owner = weak.Make(rt)
 	rt.arena = &elementOwner{rt: rt}
@@ -704,6 +719,7 @@ func (rt *engine) runFrame() {
 		rt.nextRegs = rt.nextRegs[:0]
 		clear(rt.kept)
 		rt.c.reset(now, appW, h)
+		rt.inputCapture = nil
 		rt.view(&rt.c)
 		if rt.closing {
 			// The view closed the window, as a close button does: the
@@ -770,6 +786,9 @@ func (rt *engine) runFrame() {
 	layoutTree(root, appW, h)
 	rt.measureFit(root)
 	rt.commit(root, w, h)
+	if rt.commitRefs != nil {
+		rt.commitRefs(rt)
+	}
 	// Scrolling can put a new native drop target under a stationary
 	// pointer. Resolve it against this frame's geometry, then rebuild if
 	// needed so DragOver/DataDragOver show the new target too.
@@ -816,7 +835,6 @@ func (rt *engine) runFrame() {
 	rt.text.EndFrame()
 	rt.settleKeys()
 	rt.regs, rt.nextRegs = rt.nextRegs, rt.regs
-	rt.updateTextInput()
 	rt.updateCursor()
 	if rt.access {
 		t := rt.accessTree()
@@ -1099,6 +1117,9 @@ func (rt *engine) forgetInput() {
 // prune forgets the elements the frame did not build, but those of the
 // pages Routers keep.
 func (rt *engine) prune() {
+	if rt.inputCapture == nil {
+		rt.captureClicks, rt.releaseCapture = nil, nil
+	}
 	if d := rt.drag; d != nil && d.native {
 		if s := rt.states[d.src]; s == nil || s.seen != rt.frame || s.pass != rt.pass {
 			rt.host.cancelDataDrag()
@@ -1128,6 +1149,15 @@ func (rt *engine) prune() {
 	}
 	for id, s := range rt.states {
 		if s.seen != rt.frame || s.pass != rt.pass {
+			if rt.captureClicks != nil && (rt.captureClicks.id == id || rt.captureClicks.pressID == id) {
+				rt.cancelCapturePointer()
+			}
+			if rt.pressed == s {
+				if s.capturedPointer {
+					rt.pointerCancel(rt.pressButton)
+				}
+				rt.pressed = nil
+			}
 			if !rt.keptAlive(s) {
 				if s.textAdapter != nil {
 					s.textAdapter.release()
@@ -1151,9 +1181,8 @@ func (rt *engine) prune() {
 			}
 		}
 	}
-	rt.restoreFocus()
 	// The focus does not stay in a page kept out of sight.
-	if s := rt.states[rt.focused]; s != nil && (s.seen != rt.frame || s.pass != rt.pass) {
+	if s := rt.states[rt.focused]; s == nil || s.seen != rt.frame || s.pass != rt.pass {
 		rt.focused = 0
 	}
 }
@@ -1219,6 +1248,12 @@ func (rt *engine) armTimer() {
 // frame ends: the rest of the view builds with a Context that still works,
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
+	rt.cancelCapturePointer()
+	if rt.pressed != nil {
+		rt.pointerCancel(rt.pressButton)
+	}
+	rt.inputCapture = nil
+	rt.captureClicks, rt.releaseCapture = nil, nil
 	if rt.inFrame {
 		rt.closing = true
 		return
@@ -1226,12 +1261,16 @@ func (rt *engine) close() {
 	rt.closed, rt.closing = true, false
 	clear(rt.focusFields)
 	rt.focusFields = nil
-	for _, r := range rt.refs {
-		r.closed = true
-		r.requested = false
+	for _, ref := range rt.refs {
+		if r := ref.Value(); r != nil {
+			r.closed = true
+			r.requested = false
+		}
 	}
 	clear(rt.refs)
 	rt.refs = nil
+	clear(rt.boundRefs)
+	rt.boundRefs = nil
 	clear(rt.parts)
 	rt.parts = nil
 	clear(rt.typedInputs)
@@ -1288,17 +1327,29 @@ func (rt *engine) dropFrame() {
 // endFrame ends a frame, and closes the engine when its window closed
 // during it.
 func (rt *engine) endFrame() {
+	rt.outsideFocus = rt.outsideFocus[:0]
 	rt.inFrame = false
+	callbacks := rt.afterFrame
+	rt.afterFrame = nil
+	if !rt.closing {
+		for _, callback := range callbacks {
+			callback()
+		}
+	}
 	if rt.closing {
 		rt.close() // which closes the Locals the frame dropped too
 	} else if len(rt.dropped) > 0 {
 		rt.closeDropped()
+	}
+	if !rt.closed {
+		rt.updateTextInput()
 	}
 }
 
 // commit records the laid out frame in the elements' states: their
 // boxes, the hit list in paint order, the focus order.
 func (rt *engine) commit(root *node, w, h float32) {
+	previousModal := rt.modalLayer
 	rt.hits, rt.liftHits = rt.hits[:0], rt.liftHits[:0]
 	clear(rt.posed)
 	rt.posed = rt.posed[:0]
@@ -1320,11 +1371,21 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.commitElement(root, full, false)
 	rt.liftHitsOver()
 	rt.inkStale = false
+	if rt.restoreOverlayFocus != nil {
+		rt.restoreOverlayFocus(rt, previousModal)
+	}
 	rt.arrangeFocus()
 	rt.noteGroups()
+	rt.committedEpoch = rt.epoch
 }
 
 func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
+	e.committed = true
+	pointerEvents := e.parent == nil || e.parent.st.pointerEvents
+	if e.pointerEvents != 0 {
+		pointerEvents = e.pointerEvents > 0
+	}
+	e.st.pointerEvents = pointerEvents
 	inline := e.isInline()
 	if e.kind == kindText && e.first != nil && !inline {
 		placeInline(e, e, 0)
@@ -1396,6 +1457,9 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	s.webView = e.webView
 	s.role, s.focusHighlights = e.role, e.focusHighlights
 	s.input, s.caret, s.takesText, s.noIME = e.inputFn, e.caret, e.takesText, e.noIME
+	if rt.pressed == s && s.capturedPointer && s.flags&flagDisabled != 0 {
+		rt.pointerCancel(rt.pressButton)
+	}
 	if s.observe = e.observeFn; s.observe != nil {
 		rt.observers++
 	}
@@ -1428,6 +1492,9 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	// shows, and what is Hidden, which has no box.
 	invisible := e.flags&(flagInvisible|flagInert) != 0 || hidden || e.hidden || e.backface && e.transform.facesAway()
 	s.invisible = invisible
+	if invisible && rt.pressed == s && s.capturedPointer {
+		rt.pointerCancel(rt.pressButton)
+	}
 	if invisible {
 		s.vw, s.vh = 0, 0
 	}
@@ -1449,7 +1516,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		rt.maxButton = v
 	}
 	switch {
-	case e.flags&flagPassThrough != 0 || noInput:
+	case e.flags&flagPassThrough != 0 || noInput || !pointerEvents:
 	case inline:
 		// Inline elements take the pointer over their words.
 		for _, r := range e.frags {

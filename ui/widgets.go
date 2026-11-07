@@ -191,8 +191,11 @@ func styleButton(c *context, b *node, primary bool) {
 // Inside a RichText it is a link within the paragraph; give it an empty
 // label and Children to style parts of its text.
 func coreLink(c *context, label, url string) *node {
-	t := c.theme
-	e := coreText(c, label).TextColor(t.Accent).Cursor(CursorPointer).Focusable()
+	e := coreText(c, label).TextColor(c.theme.Accent).Cursor(CursorPointer).Focusable()
+	return linkBehavior(c, e, url)
+}
+
+func linkBehavior(c *context, e *node, url string) *node {
 	e.widget, e.role = "Link", RoleLink
 	router := c.router
 	e.afterInput(func() {
@@ -623,6 +626,11 @@ func (e *node) ObjectPosition(x, y float32) *node {
 // gives the focus back to the element that had it as it came. Built inside
 // the children of a Themed, they take its theme.
 func coreOverlay(c *context, fn func()) {
+	c.rt.restoreOverlayFocus = (*engine).restoreFocus
+	buildOverlay(c, fn)
+}
+
+func buildOverlay(c *context, fn func()) {
 	saved := c.parent
 	o := c.overlayRoot()
 	c.parent = o
