@@ -58,9 +58,10 @@ func (l *Layout) visualStops(li int) []caretStop {
 			if _, ok := slices.BinarySearch(l.boundaries, at); !ok {
 				continue
 			}
-			x := x0 + (x1-x0)*float32(k)/float32(g.Runes)
+			f := line.clusterFraction(g.Cluster, g.Runes, k)
+			x := x0 + (x1-x0)*f
 			if g.RTL {
-				x = x1 - (x1-x0)*float32(k)/float32(g.Runes)
+				x = x1 - (x1-x0)*f
 			}
 			affinity, arrival := Downstream, 0
 			if k == 0 {

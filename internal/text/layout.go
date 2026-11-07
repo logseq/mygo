@@ -371,7 +371,8 @@ type Line struct {
 	upstream []float32
 	// padding is the room the padding of spans' pieces takes in the line
 	// (Span.PaddingX).
-	padding float32
+	padding        float32
+	zeroWidthStart int
 }
 
 // Glyph is a positioned glyph.
@@ -1440,7 +1441,10 @@ func glyphCount(sl shapedLine) int {
 // offset of the layout, with its top at *y, and moves *y past it. Its
 // glyphs go to room, which has room for those of sl; buf is a buffer.
 func line(p Params, text []rune, sl shapedLine, offset int, rtl bool, m lineMetrics, y *float32, room []Glyph, buf *[]int, spans []Span) Line {
-	line := Line{Start: offset + sl.start, End: offset + sl.end, RTL: rtl, Ascent: m.ascent, Descent: m.descent}
+	line := Line{Start: offset + sl.start, End: offset + sl.end, RTL: rtl, Ascent: m.ascent, Descent: m.descent, zeroWidthStart: -1}
+	for end := sl.end; end > sl.start && text[end-1] == '\u200b'; end-- {
+		line.zeroWidthStart = offset + end - 1
+	}
 	if cap(room) > 0 {
 		line.Glyphs = room
 	}

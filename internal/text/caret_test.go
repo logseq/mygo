@@ -20,6 +20,36 @@ func mixedLayout() *Layout {
 	return l
 }
 
+func TestTrailingZeroWidthClusterGeometry(t *testing.T) {
+	runes := []rune("x\u200b")
+	shaped := shapedLine{end: len(runes), runs: []shapedRun{{
+		end: len(runes), glyphs: []Glyph{{Advance: 10}},
+	}}}
+	var y float32
+	var buf []int
+	row := line(Params{}, runes, shaped, 0, false, lineMetrics{lineHeight: 20}, &y, nil, &buf, nil)
+	l := &Layout{Runes: runes, Lines: []Line{row}}
+	for _, index := range []int{1, 2} {
+		if x, _, _ := l.Caret(index); x != 10 {
+			t.Errorf("Caret(%d) = %v, want 10", index, x)
+		}
+		for _, affinity := range []Affinity{Upstream, Downstream} {
+			if x, _, _ := l.CaretAt(CaretPosition{index, affinity}); x != 10 {
+				t.Errorf("CaretAt(%d, %v) = %v, want 10", index, affinity, x)
+			}
+		}
+	}
+	if p := l.PositionAt(10, 10); p.Index != 1 {
+		t.Errorf("hit at visible end = %+v, want index 1", p)
+	}
+	if rs := l.Selection(0, 1); len(rs) != 1 || rs[0].X != 0 || rs[0].W != 10 {
+		t.Errorf("visible selection = %+v, want full glyph advance", rs)
+	}
+	if rs := l.Selection(1, 2); len(rs) != 0 {
+		t.Errorf("zero-width selection = %+v, want no area", rs)
+	}
+}
+
 func TestVisualCaretAffinityAndNavigation(t *testing.T) {
 	l := mixedLayout()
 	a, _, _ := l.CaretAt(CaretPosition{4, Upstream})

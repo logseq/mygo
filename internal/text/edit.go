@@ -11,6 +11,16 @@ import (
 // Rect is a rectangle in DIPs relative to the layout.
 type Rect struct{ X, Y, W, H float32 }
 
+// Trailing zero-width breaks may share a visible glyph's cluster, but
+// must not take part of its advance as another ligature component.
+func (line *Line) clusterFraction(start, runes, k int) float32 {
+	if end := line.zeroWidthStart; end >= 0 && start < end && start+runes > end {
+		runes = end - start
+		k = min(k, runes)
+	}
+	return float32(k) / float32(runes)
+}
+
 // lineCarets returns the x of every caret position of a line, from Start
 // to End: inside a cluster of several runes (a ligature) the positions
 // split the cluster evenly. It caches them in the line, so a layout's
@@ -39,7 +49,7 @@ func (line *Line) lineCarets() []float32 {
 		}
 	}
 	pos := func(c cluster, k int) float32 {
-		f := float32(k) / float32(c.runes)
+		f := line.clusterFraction(c.start, c.runes, k)
 		if c.rtl {
 			return c.x1 - (c.x1-c.x0)*f
 		}
@@ -182,7 +192,8 @@ func (l *Layout) AppendSelection(dst []Rect, start, end int, on bool) []Rect {
 				continue
 			}
 			width := x1 - x0
-			left, right := float32(a-first.Cluster)/float32(first.Runes), float32(z-first.Cluster)/float32(first.Runes)
+			left := line.clusterFraction(first.Cluster, first.Runes, a-first.Cluster)
+			right := line.clusterFraction(first.Cluster, first.Runes, z-first.Cluster)
 			if first.RTL {
 				left, right = 1-right, 1-left
 			}
