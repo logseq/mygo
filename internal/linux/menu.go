@@ -3,6 +3,7 @@
 package linux
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,9 +23,17 @@ import (
 type nativeItem struct {
 	owner    int
 	item     ptr
-	label    ptr
 	check    bool
 	windowID int // menu bar or popup's window; 0 for a tray
+	// disabled keeps the app's choice when enableEditItems changes the native
+	// item's state.
+	disabled bool
+	// icon is the item's icon; image and label are the widgets of an item
+	// that shows one, or did (menuicon.go).
+	icon         *platform.MenuIcon
+	image, label ptr
+	bar          bool // an item of a menu bar, which shows no icon
+	imagePNG     []byte
 }
 
 var (
@@ -37,6 +46,7 @@ var (
 
 	cbMenuActivate   ptr
 	cbMenuDeactivate ptr
+	cbMenuMap        ptr
 	cbTrayActivate   ptr
 
 	// Menu bars that hide (window.menuHides), and the keys of items with a
@@ -111,6 +121,11 @@ func initMenuCallbacks() {
 	cbMenuDeactivate = purego.NewCallback(func(menu, loop ptr) {
 		gMainLoopQuit(loop)
 	})
+	cbMenuMap = purego.NewCallback(func(menu, data ptr) {
+		if w := theBackend.window(data); w != nil {
+			w.enableEditItems()
+		}
+	})
 	// Alt pressed and released alone, or F10, show a menu bar that hides.
 	cbMenuKey = purego.NewCallback(func(widget, event, data ptr) bool {
 		w := theBackend.window(data)
@@ -123,8 +138,13 @@ func initMenuCallbacks() {
 		// GTK runs those it leaves. The app's own items go first, as on macOS.
 		if field[int32](event, 0) == 8 && w.surface != nil { // GDK_KEY_PRESS
 			k := [2]uint32{gdkKeyvalToLower(field[uint32](event, 28)), field[uint32](event, 24) & modifierMask}
-			if roleKeys[w.accel][k] && gtkWindowPropagateKeyEvent(w.win, event) {
-				return true
+			if roleKeys[w.accel][k] {
+				if gtkWindowPropagateKeyEvent(w.win, event) {
+					return true
+				}
+				// GTK drops the shortcut of an item made insensitive as the
+				// content was when its menu last opened, not as it is now.
+				w.enableEditItems()
 			}
 		}
 		if !w.menuHides() || w.menubar == 0 || gtkWidgetGetVisible(w.menubar) {
@@ -194,45 +214,33 @@ func dropOwner(owner int) {
 	}
 }
 
-// buildMenu fills a GtkMenuShell with items.
-func buildMenu(shell ptr, m *platform.Menu, accel ptr, owner, windowID int) {
+// buildMenu fills a GtkMenuShell with items; bar is a menu bar's, whose
+// own items show no icons.
+func buildMenu(shell ptr, m *platform.Menu, accel ptr, owner, windowID int, bar bool) {
 	for _, it := range m.Items {
-		gtkMenuShellAppend(shell, buildItem(it, accel, owner, windowID))
+		gtkMenuShellAppend(shell, buildItem(it, accel, owner, windowID, bar))
 	}
 }
 
-func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
-	var item, customLabel ptr
+func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int, bar bool) ptr {
+	var item ptr
 	check := false
 	switch it.Type {
 	case platform.MenuItemSeparator:
 		item = gtkSeparatorMenuItemNew()
 	case platform.MenuItemCheckbox, platform.MenuItemRadio:
-		item = gtkCheckMenuItemNewWithLabel(cs(it.Label))
+		item = gtkCheckMenuItemNewWithLabel(cs(it.LabelWithSubtitle()))
 		gtkCheckMenuItemSetDrawAsRadio(item, it.Type == platform.MenuItemRadio)
 		check = true
 	default:
-		item = gtkMenuItemNewWithLabel(cs(it.Label))
-	}
-	if len(it.ImagePNG) > 0 && it.Type != platform.MenuItemSeparator {
-		if pix, err := pixbufFromPNG(it.ImagePNG); err == nil {
-			row := gtkBoxNew(0, 8)
-			children := gtkContainerGetChildren(item)
-			for link := children; link != 0; link = field[ptr](link, 8) {
-				gtkContainerRemove(item, field[ptr](link, 0))
-			}
-			gListFree(children)
-			gtkBoxPackStart(row, gtkImageNewFromPixbuf(pix), false, false, 0)
-			customLabel = gtkLabelNew(cs(it.Label))
-			gtkBoxPackStart(row, customLabel, true, true, 0)
-			gtkContainerAdd(item, row)
-			nameMenuItem(item, it.Label)
-			gObjectUnref(pix)
-		}
+		item = gtkMenuItemNewWithLabel(cs(it.LabelWithSubtitle()))
 	}
 	if it.Submenu != nil {
 		sub := gtkMenuNew()
-		buildMenu(sub, it.Submenu, accel, owner, windowID)
+		if windowID != 0 {
+			connect(sub, "map", cbMenuMap, ptr(windowID))
+		}
+		buildMenu(sub, it.Submenu, accel, owner, windowID, false)
 		gtkMenuItemSetSubmenu(item, sub)
 	} else if it.Type != platform.MenuItemSeparator {
 		connect(item, "activate", cbMenuActivate, ptr(it.ID))
@@ -250,7 +258,11 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
 		}
 	}
 	applyState(item, it, check)
-	itemsByID[it.ID] = append(itemsByID[it.ID], nativeItem{owner: owner, item: item, label: customLabel, check: check, windowID: windowID})
+	n := nativeItem{owner: owner, item: item, check: check, windowID: windowID, disabled: !it.Enabled, bar: bar}
+	if it.Type != platform.MenuItemSeparator && !bar {
+		updateMenuItemImage(&n, it, true)
+	}
+	itemsByID[it.ID] = append(itemsByID[it.ID], n)
 	return item
 }
 
@@ -359,7 +371,7 @@ func (w *window) installMenu(m *platform.Menu) {
 	}
 	w.owner = newOwner()
 	w.menubar = gtkMenuBarNew()
-	buildMenu(w.menubar, m, w.accel, w.owner, w.id)
+	buildMenu(w.menubar, m, w.accel, w.owner, w.id, true)
 	gtkBoxPackStart(w.box, w.menubar, false, false, 0)
 	gtkBoxReorderChild(w.box, w.menubar, 0)
 	gtkWidgetShowAll(w.menubar)
@@ -379,9 +391,14 @@ func (w *window) SetAutoHideMenu(v bool) {
 }
 
 // menuHides reports whether the menu bar shows only while its menus are
-// open: one that hides, and any in full screen, which leaves the page the
-// whole screen.
-func (w *window) menuHides() bool { return w.autoHideMenu || w.state&stateFullscreen != 0 }
+// open: one that hides, any in full screen, which leaves the page the
+// whole screen, and any in a window with a hidden title bar, whose page
+// draws the title bar at the top of the window, with the window buttons
+// over it: a bar above would push both down, under the menus. Windows
+// leaves such a window no menu bar either.
+func (w *window) menuHides() bool {
+	return w.autoHideMenu || w.state&stateFullscreen != 0 || w.hiddenTitleBar()
+}
 
 // revealMenu shows a menu bar that hides and opens its first menu, as F10
 // does in GTK, while the key event is current: the menu grabs its device.
@@ -411,16 +428,64 @@ func firstMenu(bar ptr) ptr {
 }
 
 func (b *Backend) UpdateMenuItem(it *platform.MenuItem) {
-	for _, n := range itemsByID[it.ID] {
+	// New windows build the application menu as it is now.
+	b.appMenu.Apply(it)
+	for i := range itemsByID[it.ID] {
+		n := &itemsByID[it.ID][i]
 		if it.Type != platform.MenuItemSeparator {
 			if n.label != 0 {
-				menuLabelSetText(n.label, cs(it.Label))
-				nameMenuItem(n.item, it.Label)
+				loadMenuAccess()
+				menuLabelSetText(n.label, cs(it.LabelWithSubtitle()))
 			} else {
-				gtkMenuItemSetLabel(n.item, cs(it.Label))
+				gtkMenuItemSetLabel(n.item, cs(it.LabelWithSubtitle()))
+			}
+			if !n.bar {
+				updateMenuItemImage(n, it, false)
 			}
 		}
 		applyState(n.item, it, n.check)
+		n.disabled = !it.Enabled
+	}
+}
+
+func updateMenuItemImage(n *nativeItem, it *platform.MenuItem, building bool) {
+	if it.Icon != nil {
+		if (it.Icon != n.icon || len(n.imagePNG) != 0) && setMenuItemIcon != nil && (!building || n.windowID != 0) {
+			setMenuItemIcon(n, it.Icon)
+		}
+		n.icon, n.imagePNG = it.Icon, nil
+	} else if n.icon != nil || !bytes.Equal(n.imagePNG, it.ImagePNG) {
+		if n.icon != nil && setMenuItemIcon != nil {
+			setMenuItemIcon(n, nil)
+		}
+		n.icon = nil
+		setLegacyMenuItemImage(n, it.ImagePNG)
+	}
+	if n.label != 0 {
+		nameMenuItem(n.item, it.LabelWithSubtitle())
+	}
+}
+
+// enableEditItems makes the items of the edit roles in the window's menu
+// bar and popups sensitive as the native UI it shows can act on them.
+// Those of a page keep the app's state: what a page would do is not known
+// before.
+func (w *window) enableEditItems() {
+	native := w.surface != nil && w.focusedWebView() == nil
+	for id, role := range itemRoles {
+		if !platform.EditCommands[role] {
+			continue
+		}
+		for _, n := range itemsByID[id] {
+			if n.windowID != w.id {
+				continue
+			}
+			on := !n.disabled
+			if on && native {
+				on = w.h.SurfaceEvent(platform.SurfaceEvent{Kind: platform.SurfaceCommandEnabled, Text: role})
+			}
+			gtkWidgetSetSensitive(n.item, on)
+		}
 	}
 }
 
@@ -429,8 +494,10 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	// GTK positions menus relative to a window: the given one, else the
 	// active one.
 	w, _ := pw.(*window)
-	if w == nil || w.closed {
-		w = nil
+	if pw != nil && (w == nil || w.closed) {
+		return
+	}
+	if w == nil {
 		for _, x := range b.windows {
 			if !x.closed && gtkWindowIsActive(x.win) {
 				w = x
@@ -444,7 +511,8 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	owner := newOwner()
 	defer dropOwner(owner)
 	menu := gtkMenuNew()
-	buildMenu(menu, m, 0, owner, w.id)
+	buildMenu(menu, m, 0, owner, w.id, false)
+	w.enableEditItems()
 	gtkWidgetShowAll(menu)
 	event, anchor := w.popupTrigger(), w.contentWindow()
 	const northWest = 1 // GDK_GRAVITY_NORTH_WEST
@@ -526,14 +594,16 @@ func (t *tray) SetImage(png []byte, template bool) error {
 		}
 		t.iconDir = dir
 	}
-	// A new file name makes the indicator host reload the icon.
+	// A new file name makes the indicator host reload the icon. The icon
+	// goes by its absolute path, not by a name in IconThemePath: KDE looks
+	// a name up in the icon theme first, falling back from "icon-1" to
+	// "icon", and showed a theme's icon in place of the app's.
 	t.icons++
-	name := fmt.Sprintf("icon-%d", t.icons)
-	if err := os.WriteFile(filepath.Join(t.iconDir, name+".png"), png, 0o644); err != nil {
+	file := filepath.Join(t.iconDir, fmt.Sprintf("icon-%d.png", t.icons))
+	if err := os.WriteFile(file, png, 0o644); err != nil {
 		return err
 	}
-	appIndicatorSetIconThemePath(t.ind, cs(t.iconDir))
-	appIndicatorSetIconFull(t.ind, cs(name), cs(""))
+	appIndicatorSetIconFull(t.ind, cs(file), cs(""))
 	return nil
 }
 
@@ -547,9 +617,17 @@ func (t *tray) SetID(string) {}
 
 func (t *tray) SetTitle(title string) { appIndicatorSetLabel(t.ind, cs(title), cs(title)) }
 
+// SetToolTip sets the hover text. The title is what panels show when they
+// fall back to it, and setting it announces NewTitle alone: a host that
+// caches the ToolTip property, such as quickshell, would go on showing the
+// text it read when the icon appeared. Setting the tooltip as well announces
+// NewToolTip, so both stay in step.
 func (t *tray) SetToolTip(tip string) {
 	if appIndicatorSetTitle != nil {
 		appIndicatorSetTitle(t.ind, cs(tip))
+	}
+	if appIndicatorSetTooltipFull != nil {
+		appIndicatorSetTooltipFull(t.ind, nil, cs(tip), nil)
 	}
 }
 
@@ -558,11 +636,19 @@ func (t *tray) SetMenu(m *platform.Menu) {
 	t.owner = newOwner()
 	menu := gtkMenuNew()
 	if m != nil {
-		buildMenu(menu, m, 0, t.owner, 0)
+		buildMenu(menu, m, 0, t.owner, 0, false)
 	}
 	gtkWidgetShowAll(menu)
 	appIndicatorSetMenu(t.ind, menu)
 	t.menu = menu
+	// The items are exported now: give them their icons.
+	for _, list := range itemsByID {
+		for _, n := range list {
+			if n.owner == t.owner && n.icon != nil {
+				setMenuItemIcon(&n, n.icon)
+			}
+		}
+	}
 }
 
 func (t *tray) PopUpMenu(*platform.Menu) {}
