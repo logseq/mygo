@@ -108,7 +108,8 @@ func (e Element) ContextMenuBase(present func(x, y float32)) Element {
 	request := &n.c.rt.menu
 	if request.asked == n.id && !request.button {
 		request.asked = 0
-		present(request.x, request.y)
+		z := n.c.rt.zoomFactor()
+		present(request.x*z, request.y*z)
 	}
 	return e
 }
