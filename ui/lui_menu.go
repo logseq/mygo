@@ -3,6 +3,8 @@ package ui
 import (
 	"image"
 	"image/color"
+
+	mygo "github.com/egoist/mygo"
 )
 
 // OpenContextMenuAt requests this element's ContextMenu at window coordinates
@@ -57,6 +59,11 @@ func (e Element) OnMenuDismiss(fn func()) Element {
 func (it *MenuItem) ImagePNG(data []byte) *MenuItem {
 	if it.p != nil {
 		it.p.ImagePNG = append([]byte(nil), data...)
+		if it.p.Icon == nil && len(data) != 0 {
+			if icon, err := mygo.NewMenuIcon(data, false); err == nil {
+				it.p.Icon = icon.PlatformMenuIcon()
+			}
+		}
 	}
 	return it
 }

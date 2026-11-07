@@ -34,6 +34,7 @@ type TextInputClient interface {
 	ReplaceText(*TextRange, string)
 	SetMarkedText(*TextRange, string, TextRange)
 	EndComposition()
+	CancelComposition()
 	UnmarkText()
 	BoundsForRange(TextRange) (RectF, TextRange, bool)
 	IndexForPoint(x, y float64) (int, bool)
@@ -52,6 +53,13 @@ func (c *InputComposition) End(client TextInputClient) {
 		c.pending, c.client = &r, client
 	}
 	client.EndComposition()
+}
+
+// Cancel discards unaccepted preedit, restoring the client's committed text
+// and selection without accepting a replacement.
+func (c *InputComposition) Cancel(client TextInputClient) {
+	c.Reset()
+	client.CancelComposition()
 }
 func (c *InputComposition) Replace(client TextInputClient, r *TextRange, text string) {
 	if c.client != nil && c.client != client {
