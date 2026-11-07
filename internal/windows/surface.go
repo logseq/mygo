@@ -911,12 +911,13 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: modifiers})
 		}
 		k, physical, ok := keyAndPosition(wp, lp, false, modifiers)
+		beforeContent := func() bool { return s.menuShortcut(wp, false) }
 		if ok {
-			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers, Repeat: lp&(1<<30) != 0, Text: keyText(wp, lp)})
+			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Code: keyCode(wp, lp), Mods: modifiers, Repeat: lp&(1<<30) != 0, Text: keyText(wp, lp), BeforeContent: beforeContent})
 		} else {
-			s.keyTaken = s.rawKey(platform.RawKeyPressed, wp, lp, physical, modifiers)
+			s.keyTaken = s.rawKey(platform.RawKeyPressed, wp, lp, physical, modifiers, beforeContent)
 		}
-		if !s.keyTaken && (s.menuShortcut(wp, false) || s.menuShortcut(wp, true)) {
+		if !s.keyTaken && s.menuShortcut(wp, true) {
 			return 0, true
 		}
 		// Alt+F4, Alt+Space and F10 keep working, and Alt the menu bar, unless
@@ -937,7 +938,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			// key goes up all the same, by its position.
 			s.held.Lift(platform.KeyUnknown, platform.KeyForScancode(uint16(lp>>16&0xFF)), modifiers, s.send)
 		} else {
-			taken = s.rawKey(platform.RawKeyReleased, wp, lp, physical, modifiers)
+			taken = s.rawKey(platform.RawKeyReleased, wp, lp, physical, modifiers, nil)
 		}
 		return 0, m == wmKeyUp || taken
 	case wmSysChar:
@@ -1099,12 +1100,12 @@ func keyCode(vk, lp uintptr) platform.KeyCode {
 // rawKey sends a key shortcuts have no name for, which keyAndPosition leaves
 // out, by its position, and reports whether the content took it. kind is
 // RawKeyPressed or RawKeyReleased.
-func (s *surface) rawKey(kind platform.SurfaceEventKind, wp, lp uintptr, physical platform.Key, modifiers platform.Modifiers) bool {
+func (s *surface) rawKey(kind platform.SurfaceEventKind, wp, lp uintptr, physical platform.Key, modifiers platform.Modifiers, beforeContent func() bool) bool {
 	code := keyCode(wp, lp)
 	if code == platform.CodeUnknown {
 		return false
 	}
-	return s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: modifiers, Repeat: kind == platform.RawKeyPressed && lp&(1<<30) != 0, Text: keyText(wp, lp)})
+	return s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: code, Mods: modifiers, Repeat: kind == platform.RawKeyPressed && lp&(1<<30) != 0, Text: keyText(wp, lp), BeforeContent: beforeContent})
 }
 
 // keyAndPosition returns the key of a WM_KEYDOWN or WM_KEYUP by virtual

@@ -241,6 +241,9 @@ func (rt *engine) rawKey(ev platform.SurfaceEvent) bool {
 	if rt.captureInput(input, rt.focused) {
 		return true
 	}
+	if kind == InputKeyDown && ev.BeforeContent != nil && ev.BeforeContent() {
+		return true
+	}
 	rt.observeFocus(input)
 	return rt.deliver(rt.focusHandler(), input)
 }

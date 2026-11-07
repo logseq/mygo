@@ -108,7 +108,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 	case platform.KeyPressed:
 		rt.modsChanged(Modifiers(ev.Mods))
 		rt.holdKey(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey))
-		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), KeyCode(ev.Code), ev.Repeat, ev.Text)
+		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), KeyCode(ev.Code), ev.Repeat, ev.Text, ev.BeforeContent)
 	case platform.ModifiersChanged:
 		rt.modsChanged(Modifiers(ev.Mods))
 	case platform.RawKeyPressed, platform.RawKeyReleased:
@@ -1021,13 +1021,13 @@ func (rt *engine) claimedBy(k keyEvent, window bool) bool {
 // keyDown handles a key pressed, and reports whether an element took it as
 // it came (HandleInput).
 func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
-	return rt.keyDownPhysical(mods, key, KeyUnknown, CodeUnknown, repeat, "")
+	return rt.keyDownPhysical(mods, key, KeyUnknown, CodeUnknown, repeat, "", nil)
 }
 
 // keyDownPhysical is keyDown with the key by position (InputEvent.PhysicalKey).
 // A chord of a key the layout does not type as a US key, as S on a Cyrillic
 // layout, matches shortcuts by that position; plain typing is untouched.
-func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCode, repeat bool, text string) bool {
+func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCode, repeat bool, text string, beforeContent func() bool) bool {
 	if platform.KeyByPosition(platform.Key(key), platform.Key(physical), platform.Modifiers(mods)) {
 		if rt.byPosition == nil {
 			rt.byPosition = map[Key]bool{}
@@ -1042,6 +1042,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 	}
 	input := InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat, Text: text}
 	if rt.captureInput(input, rt.focused) {
+		return true
+	}
+	if beforeContent != nil && beforeContent() {
 		return true
 	}
 	rt.observeFocus(input)
