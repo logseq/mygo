@@ -1434,10 +1434,17 @@ func (s *ListState) interactionRows(e *node, n int) []int {
 		add(s.dragSel.id)
 	}
 	add(rt.menu.asked)
+	add(rt.menu.later)
 	add(rt.menu.release)
 	add(rt.menu.chosen)
+	if rt.menu.pending != nil {
+		add(rt.menu.pending.id)
+	}
 	if rt.menu.active != nil {
 		add(rt.menu.active.id)
+	}
+	if rt.menu.drawn != nil {
+		add(rt.menu.drawn.id)
 	}
 	for _, st := range rt.states {
 		if st.anchor != 0 && st.seen+1 >= rt.frame {
