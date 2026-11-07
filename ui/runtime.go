@@ -25,6 +25,13 @@ type host interface {
 	occluded() bool
 	present(s *scene.Scene)
 	requestFrame()
+	// setFrameRate tells the surface how many frames a second come while
+	// only drawings move, 0 for one each refresh (engine.pace).
+	setFrameRate(fps float32)
+	// framesAtOnce reports whether requestFrame has a frame come at once
+	// rather than at the display's next refresh
+	// (platform.ImmediateFrameSurface).
+	framesAtOnce() bool
 	// afterTimer and repaintTimer arm the timers of After and
 	// Painter.After for at, or stop them for the zero time.
 	afterTimer(at time.Time)
@@ -34,6 +41,9 @@ type host interface {
 	updateAccessibility(tree *platform.AccessTree)
 	readClipboard() string
 	writeClipboard(string)
+	// writeClipboardThen puts text on the clipboard as writeClipboard
+	// does, and done gets what came of it on the main thread, later.
+	writeClipboardThen(text string, done func(error))
 	// readClipboardData reads the representations of formats on the
 	// clipboard, all for nil; writeClipboardData puts data there;
 	// clipboardFormats lists them.
@@ -63,6 +73,9 @@ type host interface {
 	// vibrancy reports whether the window shows a material where the
 	// frames are transparent.
 	vibrancy() bool
+	// active reports whether the window is drawn as active, the window
+	// the user's input goes to; it costs nothing.
+	active() bool
 	// invalidate asks for a frame from any goroutine.
 	invalidate()
 	// post runs fn on the main thread soon; it is safe from any goroutine.
@@ -74,6 +87,11 @@ type host interface {
 	// placeWebViews shows the web views where the frame shows them, and
 	// hides the others.
 	placeWebViews(views []placedWebView)
+	// nativeGlass reports whether the surface draws the system's glass.
+	nativeGlass() bool
+	// placeGlass shows the system's glass where the frame shows it, and
+	// hides the rest.
+	placeGlass(places []platform.GlassPlacement)
 	// tabIntoWebView gives the page of v the keyboard as Tab does, from
 	// its end when back (platform.WebView.TabInto).
 	tabIntoWebView(v NativeWebView, back bool)
@@ -100,6 +118,7 @@ type engine struct {
 	arena           *elementOwner
 	handleChecks    bool
 	afterInputs     []inputAction
+	afterBuild      []func() // run once the view is built (onBuilt)
 	inputs          []valueInput
 	inputAt         int
 	afterInputAt    int
@@ -120,6 +139,18 @@ type engine struct {
 	painter         Painter
 	glyphRun        glyphRun
 
+	// fit sizes a window that takes its content's size (fit.go), nil
+	// for others.
+	fit *fitter
+
+	// contentZoom is the content's zoom (Context.SetZoom), 0 for none;
+	// zoomChanged tells that it changed since the frame's size was read.
+	contentZoom float32
+	zoomChanged bool
+	// menuPresentation is how the window shows its popup menus
+	// (Context.SetMenuPresentation).
+	menuPresentation MenuPresentation
+
 	// building counts the public constructors under way: input queued
 	// while more were under way than now belongs to controls built since,
 	// which applyInputs finalizes (see value_input.go).
@@ -132,9 +163,14 @@ type engine struct {
 	measured     [8]measuredSpans
 	nextMeasured int
 	paths        paths
-	svgs         svgs
-	flex         flexScratch
-	grid         gridScratch
+	// pathClips are the masks of the paths clips were cut to lately, by
+	// their shapes (clipMask), and of the layers of masks (Masks), and
+	// maskScene the scene the layers are drawn from.
+	pathClips map[uint64]*pathClip
+	maskScene *scene.Scene
+	svgs      svgs
+	flex      flexScratch
+	grid      gridScratch
 	// under is the painter's stack of opaque backgrounds, and holes the
 	// holes it painted, kept from one frame to the next.
 	under []opaqueBox
@@ -168,7 +204,14 @@ type engine struct {
 
 	// What the last frame laid out, for input until the next one: the
 	// focus order, with the scope of each element, and the dialog on top.
-	hits        []hit
+	hits []hit
+	// liftHits gathers the hits of the elements flying as the frame
+	// commits, which go over the rest of their layer, as they paint
+	// (matches.paint); lifting tells that one is committing.
+	liftHits []hit
+	lifting  bool
+	// z is what ordering children by their z-index works in (ZIndex).
+	z           zScratch
 	focusOrder  []uint64
 	focusScopes []focusScope
 	modal       uint64
@@ -182,8 +225,13 @@ type engine struct {
 	webPlaces []webPlace
 	webOut    []placedWebView
 	webShown  bool
+	// glassPlaces are where the frame shows the system's glass, and
+	// glassShown tells that the last frame showed some.
+	glassPlaces []platform.GlassPlacement
+	glassShown  bool
 	// maxButton is where the frame shows the window's maximize button
-	// (MaximizeButton), and maxSent what the host got of it.
+	// (MaximizeButton), and maxSent what the host got of it, in the
+	// window's DIPs.
 	maxButton, maxSent Rect
 	// The focus groups of the frame, the group of each element of the
 	// focus order in one, and the element of each that had the focus
@@ -194,6 +242,12 @@ type engine struct {
 	groups     map[uint64]groupInfo
 	memberOf   map[uint64]uint64
 	groupLast  map[uint64]uint64
+	// focusFrom is the element that had the keyboard focus as the last
+	// pass ended, 0 for none or while the window did not have the keyboard
+	// (FocusLeft); leftRead tells that this pass read FocusLeft, which saw
+	// the focus on leftSaw.
+	focusFrom, leftSaw uint64
+	leftRead           bool
 	// openers are the elements that had the focus as overlays opened, by
 	// overlay; downs the elements the pointer went down on since the last
 	// pass (0 for none), for PressedOutside.
@@ -206,15 +260,27 @@ type engine struct {
 	regs                []shortcutReg
 	nextRegs            []shortcutReg
 	delivered           []shortcutReg
+	// shortcutRepeat tells that the last key a shortcut took this frame
+	// came as the auto-repeat of a key held down (ShortcutRepeated).
+	shortcutRepeat bool
+	// observers counts the elements the last commit found observing the
+	// input in them (ObserveInput), and observeBuf is the chain observe
+	// walks, kept between events.
+	observers  int
+	observeBuf []uint64
 
 	// trans are the transitions of the elements given one, by ID
 	// (transition.go): exitsBuilt tells that the last frame built elements
-	// with an Exit, whose arena the next frame keeps to copy those that
-	// go, laidW and laidH are the size the last frame was laid out at, and
-	// byID maps a frame's elements, for the copies going.
+	// with an Exit or flying with a Match, whose arena the next frame
+	// keeps to copy those that go, laidW and laidH are the size the last
+	// frame was laid out at, and byID maps a frame's elements, for the
+	// copies going. overlayExits tells that the last frame had elements
+	// with an Exit in the overlay layer, or copies leaving it: the next
+	// builds the layer, though nothing else does, for them to leave in.
 	trans map[uint64]*transition
-	// matched is where the elements of a Transition's Match showed.
-	matched map[any]*matchRec
+	// matches moves the elements of a Transition's Match, once one has
+	// one (match.go).
+	matches matcher
 	// instantFrame is the frame that DisableAnimations shows at once.
 	instantFrame uint64
 	// paints counts the frames painted, those painting the last frame's
@@ -224,10 +290,13 @@ type engine struct {
 	// (AnimatePose), parents first.
 	posed        []*node
 	exitsBuilt   bool
+	overlayExits bool
 	laidW, laidH float32
 	byID         map[uint64]*node
-	// going are animateExits' copies going, in order.
-	going []exit
+	// going are animateExits' copies going, in order, and holding the
+	// elements appearing that wait for them (AfterExits).
+	going   []exit
+	holding []transitionUse
 	// insp is the inspector (inspector.go); dupKeys are the duplicate keys
 	// reported, and warnings what the inspector lists.
 	insp inspector
@@ -253,7 +322,15 @@ type engine struct {
 	captureSerial      uint64
 	capturing          uint64
 	pointerIn          bool
-	hover              []uint64
+	// pointerType and pressure are the device of the last pointer event
+	// and how hard it pressed (InputEvent.Pressure), buttons the buttons
+	// down as the events tell, and pressureMoved that the last move
+	// changed the pressure alone, which moves as the pointer moving does.
+	pointerType   PointerType
+	pressure      float32
+	buttons       uint8
+	pressureMoved bool
+	hover         []uint64
 	// chain is a buffer for the elements under the pointer.
 	chain       []uint64
 	pressed     *state
@@ -261,11 +338,22 @@ type engine struct {
 	// pressClicks is the press's count of clicks, which its release
 	// carries.
 	pressClicks int
+	// pressEnded is the element of the last press while its release, which
+	// came with moves no pass read, waits for the pass that reads them
+	// (releaseLater) and no press came since: that pass sees it still
+	// pressed, by the button pressButton holds.
+	pressEnded *state
+	// pressLost is the handler of the element pressed when the frame
+	// built another element without one in its place, for prune to give
+	// the release to at pressLostX, pressLostY, the pointer in the axes
+	// the element had.
+	pressLost              func(InputEvent) bool
+	pressLostX, pressLostY float32
 	// downing counts the presses pointerDown is handling, and ups holds the
-	// releases (button, clicks) that came meanwhile, through a main loop
-	// a handler ran nested, for it to apply once the press is recorded.
+	// releases and cancels that came meanwhile, through a main loop a
+	// handler ran nested, for it to apply once the press is recorded.
 	downing int
-	ups     [][2]int
+	ups     []pendingUp
 	// listMenu and listDrag are the parts of lists a right-click and a
 	// drag reach, set as the first list builds, and cellClick and
 	// cellInBlock the parts of tables choosing cells a click and a press
@@ -297,10 +385,24 @@ type engine struct {
 	// change of it draws a frame.
 	windowFocused, focusRead bool
 	windowFocusEpoch         uint64
+	// activeRead tells that the last frame read whether the window is
+	// drawn as active (windowActive), so that a change of it draws a
+	// frame.
+	activeRead bool
+	// keysHeld are the keys held in the window (Context.KeyDown); keysRead
+	// tells that the last frame read them, so that a change of them draws
+	// a frame.
+	keysHeld []heldKey
+	keysRead bool
+	// withinRead tells that the frame read FocusWithin, which follows the
+	// parents its last layout committed: the focus moving as it builds, to
+	// an element it builds for the first time or after the read, draws
+	// another frame.
+	withinRead bool
 	// toasts are the toasts the window holds, oldest first, and
 	// toastList those showing, as ToastViewportBase gives them; their time
-	// stops while toastsPaused. A viewport of them was built in the pass
-	// toastPass of the frame toastFrame.
+	// stops while toastsPaused, as the user holds them. A viewport of them
+	// was built in the pass toastPass of the frame toastFrame.
 	toasts       []toast
 	nextToast    uint64
 	toastList    []Toast
@@ -320,17 +422,54 @@ type engine struct {
 	// the window, and gen the text system's Generation, as the last frame
 	// was built. The host's repaintTimer asks for a frame at repaintDue,
 	// unless one came or was asked for since. held tells that a frame, for
-	// what moves or what changed, waits for the window to show; input
-	// tells that an event other than a frame's came since the last frame
-	// built.
+	// what moves or what changed, waits for the window to show, and shown
+	// is when some of it last showed again (SurfaceShown); input tells
+	// that an event other than a frame's came since the last frame built.
 	animating  bool
 	repainting bool
 	repaintAt  time.Time
 	redraw     bool
 	held       bool
+	shown      time.Time
 	input      bool
-	painted    [3]float32
-	gen        uint64
+	// hiddenAsked tells that a view asked whether the window shows
+	// (WindowHidden), which builds it again as that changes.
+	hiddenAsked bool
+	painted     [3]float32
+	gen         uint64
+	// repaintRate is the most frames a second the drawings that move ask
+	// for with Painter.AnimationFrameRate, repaintFull whether one asked
+	// for the display's with Painter.AnimationFrame. paceEvery is how many
+	// of the display's refreshes a frame that only paints again comes
+	// every, 1 for each, and paceRate the frames a second the surface was
+	// told of (pace); pacedAt is when the last frame began, and pacedNext
+	// when the repaint timer asked for the next (framesAtOnce).
+	repaintRate float32
+	repaintFull bool
+	// drawn are the Draw and DrawOver callbacks of the last frame painted
+	// that asked to be painted again (paintPart), and untracked tells that
+	// something else asked, or that painting the parts alone would not do:
+	// the window is painted whole. partsBase is how much data the scene
+	// held painted whole (sceneData), partOps the operations of the scene
+	// painted before, and partPaints counts the frames painted in parts;
+	// noParts paints every frame whole, for tests that compare. atlases
+	// are the generations of the glyph atlases the scene was painted with,
+	// partTransient how many masks of the atlas's transient room the parts
+	// drew (text.System.TransientUses), and transient whether the rest of
+	// the scene draws any.
+	drawn         []paintPart
+	untracked     bool
+	partsBase     int
+	atlases       [2]uint64
+	partTransient uint64
+	transient     bool
+	partOps       []scene.Op
+	partPaints    int
+	noParts       bool
+	paceEvery     int
+	paceRate      float32
+	pacedAt       time.Time
+	pacedNext     time.Time
 	// inkStale tells that elements moved since commit found their ink
 	// (node.ink), as poses do in frames that only paint: painting then
 	// skips none.
@@ -339,8 +478,8 @@ type engine struct {
 	// late is set when lists built elements while laying out.
 	late bool
 	// revealIDs are the elements to scroll into view once the frame is
-	// laid out.
-	revealIDs []uint64
+	// laid out, and how.
+	revealIDs []revealAsk
 	wakeMu    sync.Mutex
 	wakeAt    time.Time
 	cursor    Cursor
@@ -362,19 +501,25 @@ type engine struct {
 	// the page around the elements being committed.
 	kept       map[uint64]bool
 	commitPage uint64
+	// commitHidden is set while commit is inside a Hidden element.
+	commitHidden bool
 	// announcements are the texts for assistive technology to read out
 	// (Context.Announce).
 	announcements []string
+	// live is what the live regions of the last frame's tree held.
+	live liveState
 	// stats measures frames for MYGO_FRAME_STATS, nil when it is unset.
 	stats *frameStats
 	// dropOver is the element files are dragged over; access is true once
-	// assistive technology asked for the content.
-	dropOver   uint64
-	access     bool
-	blinkStart time.Time
-	inFrame    bool
-	dark       bool
-	darkKnown  bool
+	// assistive technology asked for the content, and accessNodes is how
+	// many nodes the last frame's tree had.
+	dropOver    uint64
+	access      bool
+	accessNodes int
+	blinkStart  time.Time
+	inFrame     bool
+	dark        bool
+	darkKnown   bool
 	// prefs are the desktop's preferences, read once until they change.
 	prefs      Preferences
 	prefsKnown bool
@@ -402,6 +547,15 @@ type engine struct {
 	// wheeling are the elements of the scroll containers that the notches
 	// of a mouse wheel scroll smoothly (glideWheels).
 	wheeling []uint64
+	// snapping are the elements of the scroll containers that snap that
+	// are on their way to rest, or wait for the user's scrolling to settle
+	// (glideSnaps).
+	snapping []uint64
+	// dropped closes the Locals of the states the frame dropped, after it
+	// (closeDropped), and exits holds those of states whose elements'
+	// copies are leaving with exit transitions, until they are gone.
+	dropped []func() error
+	exits   []exitCloses
 	// lastPress is the element of the press (id) and of the one before
 	// (prev), and how many of the backend's count of clicks were before
 	// the first on it.
@@ -448,11 +602,16 @@ type shortcutReg struct {
 	// retried marks a key delivered, or left unrouted, in the frame after
 	// the one it came to (settleKeys): it is not retried again.
 	retried bool
+	// repeat marks a key delivered that came as the auto-repeat of a key
+	// held down.
+	repeat bool
 }
 
 type keyEvent struct {
 	mods Modifiers
 	key  Key
+	// repeat marks the auto-repeat of a key held down.
+	repeat bool
 }
 
 func newRuntime(view func(*context), h host) *engine {
@@ -506,21 +665,24 @@ func (rt *engine) runFrame() {
 
 	rt.frame++
 	rt.input = false
-	rt.focusRead = false
+	rt.focusRead, rt.activeRead, rt.withinRead, rt.keysRead = false, false, false, false
 	rt.stats.begin(rt)
 	now := rt.frameTime()
-	w, h, scale := rt.host.size()
+	rt.zoomChanged = false
+	w, h, scale := rt.size()
 	// The content takes the room the inspector leaves.
 	appW := rt.insp.contentWidth(w)
 	rt.insp.lap(-1)
-	rt.c.titleBar = rt.host.titleBar()
+	rt.c.titleBar = rt.titleBar()
 	rt.c.vibrancy = rt.host.vibrancy()
 	rt.text.BeginFrame()
 	rt.gen = rt.text.Generation()
 	rt.painted = [3]float32{w, h, scale}
 	rt.animating, rt.repainting, rt.repaintAt = false, false, time.Time{}
+	rt.repaintRate, rt.repaintFull, rt.untracked = 0, false, false
 	rt.routeKeys()
 	rt.glideWheels(now)
+	rt.glideSnaps(now)
 	if rt.drag != nil {
 		// The source's element is this frame's, if it builds one.
 		rt.drag.elem = nil
@@ -539,11 +701,21 @@ func (rt *engine) runFrame() {
 		rt.c.used = rt.c.dirty
 	}
 
+	focused := rt.focused
 	// An event handled while building (a click, an edit) may change what
 	// was built before it: build again, so the frame shows the outcome.
 	for pass := 0; pass < 3; pass++ {
 		rt.pass = pass
 		rt.consumed = false
+		if rt.zoomChanged {
+			// The view zoomed the content: this pass builds it at its new
+			// size.
+			rt.zoomChanged = false
+			w, h, scale = rt.size()
+			appW = rt.insp.contentWidth(w)
+			rt.c.titleBar = rt.titleBar()
+			rt.painted = [3]float32{w, h, scale}
+		}
 		rt.nextRegs = rt.nextRegs[:0]
 		clear(rt.kept)
 		rt.c.reset(now, appW, h)
@@ -555,6 +727,15 @@ func (rt *engine) runFrame() {
 			return
 		}
 		rt.buildToasts(&rt.c)
+		if d := rt.menu.drawn; d != nil && d.edit && rt.drawsMenus() {
+			menusInWindow.drawEditMenu(rt)
+		}
+		if rt.overlayExits {
+			// Copies of the elements gone from the layer leave in it
+			// (animateExits), empty as it is otherwise: it lets the
+			// pointer through, and holds nothing to focus.
+			rt.c.overlayRoot()
+		}
 		if ov := rt.c.overlay; ov != nil {
 			rt.c.root.add(ov)
 		}
@@ -562,6 +743,7 @@ func (rt *engine) runFrame() {
 			rt.buildInspector(&rt.c, appW, w, h)
 		}
 		rt.applyAllInputs()
+		rt.runAfterBuild()
 		rt.finishInputs()
 		// Commit derived values while callbacks still hold this pass's
 		// bindings. Delivered callbacks do not repeat in the next pass.
@@ -574,17 +756,35 @@ func (rt *engine) runFrame() {
 		if rt.closing {
 			return // an action closed it
 		}
-		if !rt.consumed {
+		if !rt.consumed && !rt.zoomChanged && !rt.unhoverGone() {
 			break
 		}
+	}
+	if rt.zoomChanged {
+		// Zoomed in the last pass: laid out at the new size, and built
+		// at it in the next frame.
+		rt.zoomChanged = false
+		w, h, scale = rt.size()
+		appW = rt.insp.contentWidth(w)
+		rt.c.titleBar = rt.titleBar()
+		rt.painted = [3]float32{w, h, scale}
+		rt.host.requestFrame()
+	}
+	if rt.withinRead && rt.focused != focused {
+		rt.animating = true
 	}
 	if rt.stats != nil {
 		rt.stats.passes = rt.pass + 1
 	}
+	root := rt.c.root
+	if rt.insp.open {
+		// What the inspector's Styles tab changed, over what the view built.
+		rt.insp.applyEdits(root)
+	}
 	rt.stats.lap(phaseBuild)
 	rt.insp.lap(0)
-	root := rt.c.root
 	layoutTree(root, appW, h)
+	rt.measureFit(root)
 	rt.commit(root, w, h)
 	if rt.commitRefs != nil {
 		rt.commitRefs(rt)
@@ -622,9 +822,11 @@ func (rt *engine) runFrame() {
 	rt.insp.lap(2)
 	rt.host.present(&rt.scene)
 	rt.placeWebViews()
-	if rt.maxButton != rt.maxSent {
-		rt.maxSent = rt.maxButton
-		rt.host.setMaximizeButton(rt.maxButton)
+	rt.placeNativeGlass()
+	// The window hit-tests its maximize button in its own DIPs.
+	if r := rt.windowRect(rt.maxButton); r != rt.maxSent {
+		rt.maxSent = r
+		rt.host.setMaximizeButton(r)
 	}
 	rt.stats.lap(phasePresent)
 	rt.prune()
@@ -635,7 +837,9 @@ func (rt *engine) runFrame() {
 	rt.regs, rt.nextRegs = rt.nextRegs, rt.regs
 	rt.updateCursor()
 	if rt.access {
-		rt.host.updateAccessibility(rt.accessTree())
+		t := rt.accessTree()
+		rt.liveRegions(t, true)
+		rt.host.updateAccessibility(rt.windowAccess(t))
 	}
 	if h, ok := rt.host.(*headless); ok {
 		// For tests, whether assistive technology reads the window or not.
@@ -643,8 +847,9 @@ func (rt *engine) runFrame() {
 	}
 	rt.announcements = rt.announcements[:0]
 	rt.next()
-	if len(rt.retried) > 0 {
-		// The keys retried route in a frame built anew, at once.
+	if len(rt.retried) > 0 || len(rt.keys) > 0 {
+		// The keys retried, and those waiting for an element that took
+		// one (routeKeys), route in a frame built anew, at once.
 		rt.redraw, rt.repaintDue = false, time.Time{}
 		rt.host.requestFrame()
 	}
@@ -692,14 +897,59 @@ func (rt *engine) next() {
 	case moving && rt.host.occluded():
 		rt.held = true
 	case rt.animating:
+		rt.pace(0)
 		rt.host.requestFrame()
 	case rt.repainting:
 		rt.redraw = true
+		fps := rt.repaintRate
+		if rt.repaintFull {
+			fps = 0
+		}
+		rt.pace(fps)
 		rt.host.requestFrame()
 	case !rt.repaintAt.IsZero():
+		rt.pace(0)
 		rt.redraw, rt.repaintDue = true, rt.repaintAt
+	default:
+		rt.pace(0)
 	}
 	rt.host.repaintTimer(rt.repaintDue)
+}
+
+// pace has the frames that only paint again come at fps frames a second,
+// or at each of the display's refreshes for 0: every so many refreshes,
+// the most that still give fps frames a second, so that they come evenly,
+// as a 120 Hz display draws 60, 40 or 30 frames a second but not 50. The
+// surface is told, where it can have the display refresh as often
+// (platform.FrameRateSurface), as ProMotion displays do; elsewhere, and
+// until it does, the refreshes between draw nothing (surfaceFrame). With
+// the display's rate unknown, as in browsers, frames come at each.
+func (rt *engine) pace(fps float32) {
+	every, rate := 1, float32(0)
+	if hz := rt.host.refreshRate(); fps > 0 && hz > 0 {
+		// A display of 59.94 Hz draws 30 frames a second every 2.
+		every = max(1, int(hz/fps+0.05))
+		if every > 1 {
+			rate = hz / float32(every)
+		}
+	}
+	rt.paceEvery = every
+	if rate != rt.paceRate {
+		rt.paceRate = rate
+		rt.host.setFrameRate(rate)
+	}
+}
+
+// paceSkips reports whether the frame the surface asks for now comes
+// before the frames that only paint again are due (pace), half a refresh
+// early at most, as refreshes come a little late or early.
+func (rt *engine) paceSkips() bool {
+	hz := rt.host.refreshRate()
+	if !rt.redraw || rt.paceEvery <= 1 || hz <= 0 || rt.pacedAt.IsZero() {
+		return false
+	}
+	due := time.Duration((float32(rt.paceEvery) - 0.5) * float32(time.Second) / hz)
+	return rt.now().Sub(rt.pacedAt) < due
 }
 
 // repaintNow asks for the frame that Painter.After asked for, unless
@@ -721,7 +971,32 @@ func (rt *engine) surfaceFrame() {
 	if rt.holdFrame() {
 		return
 	}
-	if w, h, scale := rt.host.size(); rt.redraw && !rt.inFrame && rt.c.root != nil &&
+	if rt.paceSkips() {
+		rt.frameAt = time.Time{}
+		if rt.host.framesAtOnce() {
+			// A frame asked for would come at once, again and again
+			// until this one is due: the repaint timer asks for it then.
+			hz := rt.host.refreshRate()
+			rt.repaintDue = rt.pacedAt.Add(time.Duration(float64(rt.paceEvery) * float64(time.Second) / float64(hz)))
+			rt.pacedNext = rt.repaintDue
+			rt.host.repaintTimer(rt.repaintDue)
+			return
+		}
+		// The display's next refresh asks again; the frame waited for
+		// it draws at its own time.
+		rt.host.requestFrame()
+		return
+	}
+	rt.pacedAt = rt.now()
+	if next := rt.pacedNext; !next.IsZero() {
+		// The frame the timer asked for keeps the pace's own times, as the
+		// timer fires a little late: frames would come later and later.
+		rt.pacedNext = time.Time{}
+		if d := rt.pacedAt.Sub(next); d > -time.Millisecond && float32(d.Seconds())*rt.host.refreshRate() < 1 {
+			rt.pacedAt = next
+		}
+	}
+	if w, h, scale := rt.size(); rt.redraw && !rt.inFrame && rt.c.root != nil &&
 		rt.painted == [3]float32{w, h, scale} && rt.text.Generation() == rt.gen {
 		rt.repaintFrame(w, h, scale)
 		return
@@ -764,9 +1039,15 @@ func (rt *engine) repaintFrame(w, h, scale float32) {
 	rt.c.now = rt.frameTime()
 	rt.text.BeginFrame()
 	rt.repainting, rt.repaintAt = false, time.Time{}
+	// What the last frame painted outside Draw callbacks that asked to be
+	// painted again, as a content transition, moves only painted whole.
+	whole := rt.untracked
+	rt.repaintRate, rt.repaintFull, rt.untracked = 0, false, false
 	root := rt.c.root
 	rt.repose()
-	rt.paint(root, w, h, scale)
+	if whole || !rt.repaintParts() {
+		rt.paint(root, w, h, scale)
+	}
 	for try := 0; try < 2 && rt.text.Full(); try++ {
 		rt.text.MakeRoom()
 		rt.paint(root, w, h, scale)
@@ -786,22 +1067,26 @@ func (rt *engine) endPass() {
 	// Clicks the view gave its elements, which the next pass sees.
 	for _, id := range rt.clickLater {
 		if s := rt.states[id]; s != nil {
-			s.clicks++
-			s.clickMods = 0
+			s.click(0)
 		}
 	}
 	rt.clickLater = rt.clickLater[:0]
+	if mr := &rt.menu; mr.later != 0 {
+		if s := rt.states[mr.later]; s != nil {
+			rt.askMenu(s, mr.laterX, mr.laterY, true)
+		}
+		mr.later = 0
+	}
 	rt.menu.chosen = 0
 	// A shortcut the view did not ask for again, as it changed: what
 	// this frame built may take the key (settleKeys).
 	rt.unrouted = append(rt.unrouted, rt.delivered...)
 	rt.delivered = rt.delivered[:0]
 	rt.downs = rt.downs[:0]
+	rt.passFocus()
 	// The next pass may not ask again, as when the view cleared what asked.
-	for _, e := range rt.c.reveal {
-		if !slices.Contains(rt.revealIDs, e.id) {
-			rt.revealIDs = append(rt.revealIDs, e.id)
-		}
+	for _, r := range rt.c.reveal {
+		rt.askReveal(r.e.id, r.o)
 	}
 }
 
@@ -815,10 +1100,17 @@ func (rt *engine) forgetInput() {
 		s.clicks, s.rightClicks, s.doubleClicks = 0, 0, 0
 		s.pressPending = false
 		s.dragX, s.dragY = 0, 0
-		s.released = false
+		s.released, s.canceled = false, false
 		s.dropped = nil
 		s.droppedValue, s.hasDropped = nil, false
+		s.dragMissed = false
 		s.dataDropped = nil
+		if s.releaseLater.due {
+			// The pass read the moves of a press that ended: the next
+			// pass sees it end, and the clicks it gave.
+			rt.applyRelease(s)
+			rt.consumed = true
+		}
 	}
 }
 
@@ -833,14 +1125,36 @@ func (rt *engine) prune() {
 			rt.host.cancelDataDrag()
 		}
 	}
+	if p := rt.pressed; p != nil {
+		// The element pressed is gone, as when its press moved it into
+		// another container: not built again, or built over by one that
+		// does not take its input. Its release will not come to it, so
+		// its handler gets one now, as when the window loses the focus,
+		// rather than taking the next press for that release.
+		input, gone := p.input, p.seen != rt.frame || p.pass != rt.pass
+		x, y := p.local(rt.pointerX, rt.pointerY)
+		if rt.pressLost != nil {
+			input, gone, x, y = rt.pressLost, true, rt.pressLostX, rt.pressLostY
+		}
+		if gone {
+			rt.endPress(input, x, y)
+			// A frame built anew for the press ended and what the handler
+			// did with it, not one only painting again.
+			rt.animating = true
+		}
+	}
+	rt.pressLost = nil
+	if len(rt.exits) > 0 {
+		rt.exitsEnded()
+	}
 	for id, s := range rt.states {
 		if s.seen != rt.frame || s.pass != rt.pass {
-			if rt.captureClicks != nil && rt.captureClicks.id == id {
-				rt.captureClicks.id = 0
+			if rt.captureClicks != nil && (rt.captureClicks.id == id || rt.captureClicks.pressID == id) {
+				rt.cancelCapturePointer()
 			}
 			if rt.pressed == s {
 				if s.capturedPointer {
-					rt.pointerCancel()
+					rt.pointerCancel(rt.pressButton)
 				}
 				rt.pressed = nil
 			}
@@ -848,9 +1162,15 @@ func (rt *engine) prune() {
 				if s.textAdapter != nil {
 					s.textAdapter.release()
 				}
+				if s.closes != nil {
+					rt.dropCloses(s)
+				}
 				delete(rt.states, id)
 				if rt.scrollDrag.st == s {
 					rt.scrollDrag.st = nil
+				}
+				if rt.pressEnded == s {
+					rt.pressEnded = nil
 				}
 				// Recycle the state itself, without keeping the editor,
 				// local resources or callbacks of the element that went.
@@ -928,8 +1248,9 @@ func (rt *engine) armTimer() {
 // frame ends: the rest of the view builds with a Context that still works,
 // and reads the theme, the size and its state as before.
 func (rt *engine) close() {
-	if rt.pressed != nil && rt.pressed.capturedPointer {
-		rt.pointerCancel()
+	rt.cancelCapturePointer()
+	if rt.pressed != nil {
+		rt.pointerCancel(rt.pressButton)
 	}
 	rt.inputCapture = nil
 	rt.captureClicks, rt.releaseCapture = nil, nil
@@ -958,6 +1279,8 @@ func (rt *engine) close() {
 	rt.notices = nil
 	clear(rt.afterInputs)
 	rt.afterInputs = nil
+	clear(rt.afterBuild)
+	rt.afterBuild = nil
 	clear(rt.inputs)
 	rt.inputs = nil
 	rt.arena.rt = nil
@@ -976,6 +1299,29 @@ func (rt *engine) close() {
 	}
 	rt.host.afterTimer(time.Time{})
 	rt.host.repaintTimer(time.Time{})
+	// Last, with the engine closed: a Close that asks for a frame, or reads
+	// the window, finds it closed rather than half so.
+	rt.closeLocals()
+	rt.dropFrame()
+}
+
+// dropFrame lets go of what the closed window showed: the view, and all
+// it reaches, the elements of the last frame, their states and the scene
+// painted from them, with the bitmaps they drew. Whatever may still hold
+// the engine of a closed window (the window, a renderer, a plugin)
+// keeps none of it (#1281). The engine draws no frame once closed.
+func (rt *engine) dropFrame() {
+	rt.view = func(*context) {}
+	rt.scene = scene.Scene{}
+	rt.maskScene = nil
+	clear(rt.pathClips)
+	c := &rt.c
+	c.parent, c.root, c.overlay = nil, nil, nil
+	c.chunks, c.spare = nil, nil
+	c.used, c.dirty, c.spareDirty = 0, 0, 0
+	clear(rt.states)
+	rt.free = nil
+	rt.hits, rt.liftHits = nil, nil
 }
 
 // endFrame ends a frame, and closes the engine when its window closed
@@ -991,8 +1337,9 @@ func (rt *engine) endFrame() {
 		}
 	}
 	if rt.closing {
-		rt.close()
-		return
+		rt.close() // which closes the Locals the frame dropped too
+	} else if len(rt.dropped) > 0 {
+		rt.closeDropped()
 	}
 	if !rt.closed {
 		rt.updateTextInput()
@@ -1003,14 +1350,17 @@ func (rt *engine) endFrame() {
 // boxes, the hit list in paint order, the focus order.
 func (rt *engine) commit(root *node, w, h float32) {
 	previousModal := rt.modalLayer
-	rt.hits = rt.hits[:0]
+	rt.hits, rt.liftHits = rt.hits[:0], rt.liftHits[:0]
 	clear(rt.posed)
 	rt.posed = rt.posed[:0]
 	clear(rt.webPlaces)
 	rt.webPlaces = rt.webPlaces[:0]
+	clear(rt.glassPlaces)
+	rt.glassPlaces = rt.glassPlaces[:0]
 	rt.maxButton = Rect{}
 	rt.focusOrder, rt.focusScopes = rt.focusOrder[:0], rt.focusScopes[:0]
 	rt.modal, rt.modalLayer, rt.commitScope, rt.commitPage = 0, 0, focusScope{}, 0
+	rt.observers = 0
 	if rt.groups == nil {
 		rt.groups = map[uint64]groupInfo{}
 	}
@@ -1018,7 +1368,8 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.labels = rt.labels[:0]
 	// The window, which the inspector shares with the root.
 	full := Rect{0, 0, w, h}
-	rt.commitElement(root, full, false, true)
+	rt.commitElement(root, full, false)
+	rt.liftHitsOver()
 	rt.inkStale = false
 	if rt.restoreOverlayFocus != nil {
 		rt.restoreOverlayFocus(rt, previousModal)
@@ -1028,18 +1379,28 @@ func (rt *engine) commit(root *node, w, h float32) {
 	rt.committedEpoch = rt.epoch
 }
 
-func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) {
+func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	e.committed = true
+	pointerEvents := e.parent == nil || e.parent.st.pointerEvents
 	if e.pointerEvents != 0 {
 		pointerEvents = e.pointerEvents > 0
 	}
+	e.st.pointerEvents = pointerEvents
 	inline := e.isInline()
 	if e.kind == kindText && e.first != nil && !inline {
 		placeInline(e, e, 0)
 	}
+	savedHidden := rt.commitHidden
+	rt.commitHidden = savedHidden || e.hidden
 	saved, savedPage := rt.enterScope(e), rt.commitPage
-	defer func() { rt.commitScope, rt.commitPage = saved, savedPage }()
+	defer func() { rt.commitScope, rt.commitPage, rt.commitHidden = saved, savedPage, savedHidden }()
 	s := e.st
+	if s == rt.pressed && s.input != nil && e.inputFn == nil {
+		// Another element took the place of the one pressed (prune), in
+		// the axes the element pressed had.
+		rt.pressLost = s.input
+		rt.pressLostX, rt.pressLostY = s.local(rt.pointerX, rt.pointerY)
+	}
 	s.page = rt.commitPage
 	if e.flags&flagPage != 0 {
 		rt.commitPage = e.id
@@ -1055,6 +1416,18 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 	s.clips = e.flags&(flagClipX|flagClipY|flagScrollX|flagScrollY) != 0
 	if s.clips {
 		s.clipRect, s.clipRadii = e.clipRect()
+	}
+	s.selfClip, s.selfRadius, s.selfClips = e.selfClip()
+	s.hitFn = e.hitFn
+	if len(rt.liftHits) > 0 && (e == e.c.overlay || e.parent != nil && e.parent == e.c.overlay) {
+		// The elements flying in the layer before, the window's content
+		// or an overlay, go over it, under this one.
+		rt.liftHitsOver()
+	}
+	s.lifted = e.lift
+	lifting := e.lift && !rt.lifting
+	if lifting {
+		clip = rt.lift()
 	}
 	s.x, s.y, s.w, s.h = e.x, e.y, e.w, e.h
 	if e.parent != nil {
@@ -1073,12 +1446,22 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 		// disabled after building it, as a Fieldset.
 		s.flags |= flagDisabled
 	}
+	s.ignoreInput = e.ignoreInput || e.parent != nil && e.parent.st.ignoreInput
+	s.accessHidden = e.accessHidden || e.flags&flagInert != 0 || e.parent != nil && e.parent.st.accessHidden
+	s.accessDisabled = e.accessDisabled || e.parent != nil && e.parent.st.accessDisabled
+	s.activeDescendant = 0
+	if d := e.activeDescendant; d != nil {
+		s.activeDescendant = d.id
+	}
 	s.cursor, s.tip = e.cursor, e.tip
 	s.webView = e.webView
-	s.role = e.role
+	s.role, s.focusHighlights = e.role, e.focusHighlights
 	s.input, s.caret, s.takesText, s.noIME = e.inputFn, e.caret, e.takesText, e.noIME
 	if rt.pressed == s && s.capturedPointer && s.flags&flagDisabled != 0 {
-		rt.pointerCancel()
+		rt.pointerCancel(rt.pressButton)
+	}
+	if s.observe = e.observeFn; s.observe != nil {
+		rt.observers++
 	}
 	s.copyData = e.copyData
 	if s.textClient != e.textClient {
@@ -1101,28 +1484,39 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 	if e.flags&(flagScrollX|flagScrollY) != 0 {
 		s.contentW, s.contentH = e.contentW, e.contentH
 		s.barInset = e.barInset
+		s.barWidth = e.theme().scrollbarWidth()
 	}
+	s.hideScrollbars, _ = e.scrollbars()
 	// What is invisible keeps its box but takes neither the pointer nor
 	// the focus, and has no text to find; so does what is inert, which
-	// shows.
-	invisible := e.flags&(flagInvisible|flagInert) != 0 || hidden || e.backface && e.transform.facesAway()
+	// shows, and what is Hidden, which has no box.
+	invisible := e.flags&(flagInvisible|flagInert) != 0 || hidden || e.hidden || e.backface && e.transform.facesAway()
+	s.invisible = invisible
 	if invisible && rt.pressed == s && s.capturedPointer {
-		rt.pointerCancel()
+		rt.pointerCancel(rt.pressButton)
 	}
 	if invisible {
 		s.vw, s.vh = 0, 0
-		if rt.focused == e.id {
-			rt.focused = 0
-		}
+	}
+	// What ignores input shows, has its text and reads to assistive
+	// technology, but takes neither the pointer nor the focus either.
+	noInput := invisible || s.ignoreInput
+	if noInput && rt.focused == e.id {
+		rt.focused = 0
 	}
 	if e.webView != nil {
 		rt.noteWebView(e, clip, invisible)
 	}
-	if e.maximizeButton && !invisible && rt.maxButton == (Rect{}) && v.W > 0 && v.H > 0 {
+	if m, ok := e.material.(NativeGlassMaterial); ok && rt.host.nativeGlass() && !rt.preferences().ReduceTransparency {
+		if spec, ok := m.NativeGlass(); ok {
+			rt.noteNativeGlass(e, clip, invisible, spec)
+		}
+	}
+	if e.maximizeButton && !noInput && rt.maxButton == (Rect{}) && v.W > 0 && v.H > 0 {
 		rt.maxButton = v
 	}
 	switch {
-	case e.flags&flagPassThrough != 0 || invisible || !pointerEvents:
+	case e.flags&flagPassThrough != 0 || noInput || !pointerEvents:
 	case inline:
 		// Inline elements take the pointer over their words.
 		for _, r := range e.frags {
@@ -1132,8 +1526,8 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 		rt.hits = append(rt.hits, hit{s, Rect{e.x, e.y, e.w, e.h}, e.flags})
 	}
 	label := e.label
-	if f := e.nameFrom; label == "" && f != nil {
-		label = f.nameOf() // an input, named by its field
+	if f := e.nameFrom; f != nil && (label == "" || e.labelledBy && f.nameOf() != "") {
+		label = f.nameOf() // an input, named by its field or its label
 	}
 	if (label != "" || e.kind == kindText) && !invisible {
 		if label == "" {
@@ -1147,7 +1541,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 			rt.labels = append(rt.labels, labelNode{e.id, label, intersect(e.visualRect(e.frags[0]), clip)})
 		}
 	}
-	if e.flags&flagFocusable != 0 && !e.IsDisabled() && !invisible {
+	if e.flags&flagFocusable != 0 && !e.IsDisabled() && !noInput {
 		rt.focusOrder = append(rt.focusOrder, e.id)
 		rt.focusScopes = append(rt.focusScopes, rt.commitScope)
 		// Tab goes to the radio button or tab chosen; not to a toggle
@@ -1163,24 +1557,64 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden, pointerEvents bool) 
 		r, _ := e.clipRect()
 		clip = intersect(clip, e.visualRect(r))
 	}
-	if ordered := e.layeredChildren(); ordered != nil {
-		for _, ch := range ordered {
-			rt.commitElement(ch, clip, invisible, pointerEvents)
-		}
+	if s.selfClips {
+		clip = intersect(clip, e.visualRect(s.selfClip))
+	}
+	// Children in flow first, absolute ones above them: the paint order.
+	// Sticky ones are in the flow for the focus, and paint among the
+	// absolute ones, where their hits go.
+	// A child with a z-index moves its hits to where it paints.
+	if e.zOrder && e != e.c.overlay && zCommit != nil {
+		zCommit(rt, e, clip, invisible)
 	} else {
-		// Children in flow first, absolute ones above them: the paint order.
+		var stuckBuf [4][2]int
+		stuck := stuckBuf[:0]
 		for ch := e.first; ch != nil; ch = ch.next {
 			if ch.flags&flagAbsolute == 0 {
-				rt.commitElement(ch, clip, invisible, pointerEvents)
+				from := len(rt.hits)
+				rt.commitElement(ch, clip, invisible)
+				if ch.sticky {
+					stuck = append(stuck, [2]int{from, len(rt.hits)})
+				}
 			}
 		}
+		moved := 0
 		for ch := e.first; ch != nil; ch = ch.next {
-			if ch.flags&flagAbsolute != 0 {
-				rt.commitElement(ch, clip, invisible, pointerEvents)
+			switch {
+			case ch.flags&flagAbsolute != 0:
+				rt.commitElement(ch, clip, invisible)
+			case ch.sticky:
+				moved = rt.stickyHits(stuck[0], moved)
+				stuck = stuck[1:]
 			}
 		}
 	}
+	if lifting {
+		rt.lift()
+	}
 	e.setInk(vis)
+	if e.hidden {
+		// It paints nothing, wherever it is.
+		e.ink, e.noCull = [4]float32{inf, inf, -inf, -inf}, false
+	}
+}
+
+// lift starts or ends committing an element flying, which takes the
+// pointer where it paints: its hits go over the rest of its layer
+// (liftHits), out of the clips around it, but the window's, which it
+// returns.
+func (rt *engine) lift() Rect {
+	rt.lifting = !rt.lifting
+	rt.hits, rt.liftHits = rt.liftHits, rt.hits
+	w, h, _ := rt.size()
+	return Rect{0, 0, w, h}
+}
+
+// liftHitsOver puts the hits of the elements flying over those committed
+// so far, as a layer ends: the window's content or an overlay.
+func (rt *engine) liftHitsOver() {
+	rt.hits = append(rt.hits, rt.liftHits...)
+	rt.liftHits = rt.liftHits[:0]
 }
 
 func intersect(a, b Rect) Rect {
@@ -1199,6 +1633,9 @@ func intersect(a, b Rect) Rect {
 // thumb being dragged wherever the pointer goes, show the default, not
 // the cursor of the text under the bar.
 func (rt *engine) updateCursor() {
+	if dragging := rt.scrollDrag.st; dragging != nil && dragging.hideScrollbars {
+		rt.scrollDrag.st = nil
+	}
 	if rt.pressed == nil && rt.scrollDrag.st == nil && rt.overWebView() {
 		// The page sets the cursor over it: it is set again as the
 		// pointer comes back.
@@ -1237,13 +1674,13 @@ func (rt *engine) updateCursor() {
 // bar element id shows.
 func (rt *engine) overScrollbar(id uint64) bool {
 	s := rt.states[id]
-	if s == nil || s.flags&(flagScrollX|flagScrollY) == 0 {
+	if s == nil || s.flags&(flagScrollX|flagScrollY) == 0 || s.hideScrollbars {
 		return false
 	}
 	x, y := s.local(rt.pointerX, rt.pointerY)
 	x += s.x
 	y += s.y
-	g := scrollBars(Rect{s.x, s.y, s.w, s.h}, s.barInset, float32(s.contentW), float32(s.contentH), float32(s.scrollX), float32(s.scrollY), s.flags, rt.c.theme.scrollbarWidth(), s.rtl)
+	g := scrollBars(Rect{s.x, s.y, s.w, s.h}, s.barInset, float32(s.contentW), float32(s.contentH), float32(s.scrollX), float32(s.scrollY), s.flags, s.barWidth, s.rtl)
 	return g.vertical && g.vTrack.Contains(x, y) || g.horizontal && g.hTrack.Contains(x, y)
 }
 

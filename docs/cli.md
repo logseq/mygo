@@ -121,6 +121,18 @@ stay apart from the installed app's. On macOS it is a real app bundle, in
 `.mygo/dev`; on Windows its executable carries the icon, manifest and
 version information that `mygo build` embeds.
 
+On macOS mygo dev signs the development app with an Apple Development
+identity from the user's keychains, as Xcode signs Debug builds: the one of
+the team of `macos.signingIdentity` when there are several. Xcode makes one
+for any Apple ID, free, under Settings > Accounts > Manage Certificates.
+Its signature stays the same from build to build, so macOS keeps what the
+user allowed the development app, such as Accessibility, Screen Recording
+or the camera, and "Always Allow" for the Keychain items it reads through
+[`mygo.Secrets`](native.md#secrets). Without one, mygo dev signs ad hoc and
+says so: ad hoc signatures change with every build, and macOS takes each
+one for another app. `-sign` uses another identity, which a provisioning
+profile needs, and `-sign -` signs ad hoc.
+
 | Flag | |
 |---|---|
 With `-web`, mygo dev develops an app of [native UI in browsers](ui/browsers.md)
@@ -133,7 +145,7 @@ compiles. `o` opens the page again.
 | Flag | |
 |---|---|
 | `-skip-dev-command` | does not run `devCommand`, e.g. when the dev server already runs |
-| `-sign` | the identity that signs the development app on macOS (default: `-`, ad hoc) |
+| `-sign` | the identity that signs the development app on macOS (default: an Apple Development identity, see below, else `-`, ad hoc) |
 | `-web` | develops the app in browsers |
 | `-port` | with `-web`, the port to serve the app at, or the next free one (default: 5174) |
 | `-open` | with `-web`, opens the app in the browser (default: true) |
@@ -164,6 +176,7 @@ content so that it can be cached for good, and the icon. See
 | `-skip-build-command` | does not run `buildCommand` |
 | `-skip-dmg` | does not make macOS disk images |
 | `-skip-notarize` | does not notarize, even with `macos.notarize` set |
+| `-skip-installer` | does not make Windows installers, nor download NSIS for them (nor `install.ps1`, which runs the installer) |
 | `-upload` | uploads the installers and updates to a draft GitHub release of the version (`updates.github`), with `gh`, or to the bucket of `updates.s3` |
 
 ## mygo generate

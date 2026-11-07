@@ -541,8 +541,9 @@ func (v *view) press(ev ui.InputEvent) bool {
 		return true
 	}
 	i, aff := v.positionAt(x, y)
-	if ev.Clicks == 1 && ev.Mods&ui.Shift == 0 && i < v.shown.Len() {
-		v.pressLink = v.shown.AttributesAt(i).Link
+	v.pressPoint = ui.Point{X: ev.X, Y: ev.Y}
+	if ev.Clicks == 1 && ev.Mods&ui.Shift == 0 {
+		v.pressLink = v.linkAt(x, y)
 	}
 	v.dragging = true
 	v.hasDesired = false
@@ -572,7 +573,7 @@ func (v *view) move(ev ui.InputEvent) bool {
 		cursor := ui.CursorText
 		if _, box := v.taskBox(x, y); box || v.overScrollbar(ev.X) {
 			cursor = ui.CursorDefault
-		} else if i, _ := v.positionAt(x, y); i < v.shown.Len() && v.shown.AttributesAt(i).Link != "" {
+		} else if v.linkAt(x, y) != "" {
 			cursor = ui.CursorPointer
 		}
 		if cursor != v.cursor {
@@ -606,7 +607,8 @@ func (v *view) move(ev ui.InputEvent) bool {
 	default:
 		v.caret, v.affinity = i, aff
 	}
-	if i != v.dragStart[0] || v.dragUnit != 1 {
+	dx, dy := ev.X-v.pressPoint.X, ev.Y-v.pressPoint.Y
+	if i != v.dragStart[0] || v.dragUnit != 1 || dx*dx+dy*dy >= 16 {
 		v.pressLink = ""
 	}
 	v.reveal = true
@@ -625,7 +627,10 @@ func (v *view) release(ev ui.InputEvent) bool {
 	v.dragging = false
 	link := v.pressLink
 	v.pressLink = ""
-	if link != "" && v.caret == v.selAnchor {
+	// A press the system took opens no link.
+	x, y := v.contentPoint(ev.X, ev.Y)
+	dx, dy := ev.X-v.pressPoint.X, ev.Y-v.pressPoint.Y
+	if link != "" && v.caret == v.selAnchor && !ev.Canceled && dx*dx+dy*dy < 16 && v.linkAt(x, y) == link {
 		if v.opts.OnLink != nil {
 			v.opts.OnLink(link)
 		} else if ui.SafeToOpen(link) {
@@ -633,6 +638,35 @@ func (v *view) release(ev ui.InputEvent) bool {
 		}
 	}
 	return true
+}
+
+// Attachments occupy one rune, but either half of their drawn box opens
+// the link. Keep nearest-caret hit testing for selection alone.
+func (v *view) linkAt(x float32, y float64) string {
+	p, l, _ := v.layoutPositionAt(x, y)
+	if p < 0 {
+		return ""
+	}
+	pv := v.paraLayout(p)
+	ox, oy := v.origin(p)
+	for _, object := range pv.layout.Objects() {
+		if object.Rect.Contains(x-ox, float32(y-oy)) {
+			at := pv.runeOfUnit(object.Index)
+			start := v.caret - v.shown.paraStart(p)
+			if v.compose != "" && v.shown.paraAt(v.caret) == p && at >= start && at < start+len([]rune(v.compose)) {
+				return ""
+			}
+			return v.shown.AttributesAt(v.global(p, at)).Link
+		}
+	}
+	i := v.global(p, l)
+	if i < v.shown.Len() {
+		a := v.shown.AttributesAt(i)
+		if a.Attachment == nil {
+			return a.Link
+		}
+	}
+	return ""
 }
 
 // taskBox reports whether (x, y), in the content, is on the check box of
@@ -660,30 +694,18 @@ func (v *view) overScrollbar(x float32) bool {
 	return v.hs.top(len(v.paras)) > float64(v.viewH) && x >= v.rect.W-scrollbarWidth
 }
 
+// bar returns the scroll bar, in the element.
+func (v *view) bar() ui.Scrollbar {
+	return ui.Scrollbar{Box: ui.Rect{W: v.rect.W, H: v.rect.H}, View: v.viewH, Content: float32(v.hs.top(len(v.paras))), Offset: float32(v.scroll)}
+}
+
 // thumbBox returns the top and the height of the scroll bar's thumb, in
 // the element.
-func (v *view) thumbBox() (top, size float32) {
-	total := v.hs.top(len(v.paras))
-	track := v.rect.H - 4
-	size = max(24, track*float32(float64(v.viewH)/max(total, 1)))
-	room := float64(track - size)
-	at := 0.0
-	if max := total - float64(v.viewH); max > 0 {
-		at = v.scroll / max
-	}
-	return 2 + float32(room*at), size
-}
+func (v *view) thumbBox() (top, size float32) { return v.bar().Thumb() }
 
 // dragThumb scrolls as the thumb is dragged to y.
 func (v *view) dragThumb(y float32) {
-	_, size := v.thumbBox()
-	track := v.rect.H - 4 - size
-	total := v.hs.top(len(v.paras)) - float64(v.viewH)
-	if track <= 0 || total <= 0 {
-		return
-	}
-	f := float64((y - v.thumbGrab - 2) / track)
-	v.setScroll(max(0, min(f, 1)) * total)
+	v.setScroll(float64(v.bar().OffsetAt(y - v.thumbGrab)))
 }
 
 // menu builds the editor's context menu.

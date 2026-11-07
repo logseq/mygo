@@ -2,9 +2,12 @@ package ui
 
 import (
 	"errors"
+	"image"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/scene"
@@ -401,5 +404,214 @@ func TestPacedFrameWaitsForTheDisplay(t *testing.T) {
 	paced()
 	if h.waiting {
 		t.Fatal("a paced frame still waits for a renderer let go")
+	}
+}
+
+// refreshSurface is a paced test surface that shows frames drawn in
+// memory at once, as Windows' does, and whose display refreshes as the
+// test sends on refresh.
+type refreshSurface struct {
+	pacedSurface
+	refresh chan struct{}
+}
+
+func (s *refreshSurface) AwaitRefresh() { <-s.refresh }
+
+// TestFramesInMemoryWaitForTheRefresh checks that, on a surface that
+// shows frames drawn in memory at once, a paced frame following one waits,
+// without drawing, for the display's next refresh, and draws at once
+// then; that the wait lasts at least half a refresh, and at most two when
+// none comes; and that elsewhere paced frames drawn in memory draw at once.
+func TestFramesInMemoryWaitForTheRefresh(t *testing.T) {
+	t.Setenv("MYGO_GPU", "0")
+	s := &refreshSurface{refresh: make(chan struct{})}
+	t.Cleanup(func() { close(s.refresh) })
+	h := &windowHost{conn: &surface.Conn{Surface: s}}
+	h.rt = newRuntime(func(c *context) { coreText(c, "Hello") }, h)
+	s.h = h
+	posted := make(chan func(), 8)
+	h.conn.Post = func(fn func()) { posted <- fn }
+	runPosted := func() {
+		t.Helper()
+		select {
+		case fn := <-posted:
+			fn()
+		case <-time.After(5 * time.Second):
+			t.Fatal("nothing posted to the main thread")
+		}
+	}
+	frame := func() { h.event(platform.SurfaceEvent{Kind: platform.SurfaceFrame}) }
+	paced := func() { h.event(platform.SurfaceEvent{Kind: platform.SurfaceFrame, Paced: true}) }
+	period := time.Second / 60
+
+	start := time.Now()
+	frame()
+	if s.pixels != 1 || h.gpu != nil {
+		t.Fatalf("first frame: %d drawn in memory, GPU %v", s.pixels, h.gpu != nil)
+	}
+	paced()
+	paced() // a later refresh asks for the same frame
+	if s.pixels != 1 || !h.waiting {
+		t.Fatalf("before the refresh: %d frames, waiting %v", s.pixels, h.waiting)
+	}
+	s.refresh <- struct{}{}
+	runPosted() // the refresh came
+	if d := time.Since(start); d < period/2 {
+		t.Errorf("the refresh came after %v, before half a refresh", d)
+	}
+	if s.pixels != 1 {
+		t.Fatalf("woken off the main thread: %d frames", s.pixels)
+	}
+	runPosted() // the window draws the frame waiting
+	if s.pixels != 2 || s.now != 1 || h.waiting {
+		t.Fatalf("after the refresh: %d frames, %d drawn at once, waiting %v", s.pixels, s.now, h.waiting)
+	}
+
+	// A refresh that never comes holds the next frame two refreshes at most.
+	paced()
+	if s.pixels != 2 || !h.waiting {
+		t.Fatalf("waiting again: %d frames, waiting %v", s.pixels, h.waiting)
+	}
+	runPosted()
+	runPosted()
+	if s.pixels != 3 || s.now != 2 {
+		t.Fatalf("without a refresh: %d frames, %d drawn at once", s.pixels, s.now)
+	}
+
+	// A frame drawn at once, as a resize's, draws while a refresh is
+	// awaited, and the paced one waiting with it.
+	paced()
+	frame()
+	if s.pixels != 4 || h.waiting {
+		t.Fatalf("drawn at once: %d frames, waiting %v", s.pixels, h.waiting)
+	}
+
+	// A surface whose display paces the frames itself, as macOS's and
+	// Linux's, draws paced frames in memory at once.
+	ps := &pacedSurface{h: h}
+	h.conn.Surface = ps
+	h.refresh = nil
+	frame()
+	paced()
+	paced()
+	if ps.pixels != 3 || h.waiting {
+		t.Fatalf("paced by the display: %d frames, waiting %v", ps.pixels, h.waiting)
+	}
+}
+
+// backgroundSurface is a test surface that records the backgrounds it is
+// told (platform.BackgroundSurface).
+type backgroundSurface struct {
+	testSurface
+	told []platform.Color
+}
+
+func (s *backgroundSurface) SetBackground(c platform.Color) { s.told = append(s.told, c) }
+
+var _ platform.BackgroundSurface = (*backgroundSurface)(nil)
+
+// bgGPU is a GPU renderer that records the background of the last scene.
+type bgGPU struct {
+	testGPU
+	bg scene.Color
+}
+
+func (g *bgGPU) Render(s *scene.Scene) error {
+	g.bg = s.Background
+	return g.testGPU.Render(s)
+}
+
+// TestWindowBackground checks that the surface and the GPU renderer learn
+// the theme's background, which a window shows where it grew before the
+// frame of its new size (#222): once per change, and none for a
+// transparent root.
+func TestWindowBackground(t *testing.T) {
+	g := &bgGPU{}
+	h, _, frame := gpuHost(t, func() (gpuRenderer, error) { return g, nil })
+	s := &backgroundSurface{}
+	h.conn.Surface = s
+	theme, transparent := LightTheme(), false
+	h.rt = newRuntime(func(c *context) {
+		c.SetTheme(theme)
+		if transparent {
+			c.Root().Background(Transparent)
+		}
+		coreText(c, "Hello")
+	}, h)
+	light, dark := LightTheme().Background.scene(), DarkTheme().Background.scene()
+	step := func(what string, want scene.Color, told []platform.Color) {
+		t.Helper()
+		h.rt.requestFrame()
+		frame()
+		if g.bg != want || !slices.Equal(s.told, told) {
+			t.Fatalf("%s: the renderer drew on %v, the surface was told %v; want %v and %v", what, g.bg, s.told, want, told)
+		}
+	}
+	step("light", light, []platform.Color{platform.Color(light)})
+	step("light again", light, []platform.Color{platform.Color(light)})
+	theme = DarkTheme()
+	step("dark", dark, []platform.Color{platform.Color(light), platform.Color(dark)})
+	transparent = true
+	step("transparent", scene.Color{}, []platform.Color{platform.Color(light), platform.Color(dark), {}})
+}
+
+// sceneGPU is a GPU renderer that keeps the last scene it drew, as
+// renderers that draw only what changed keep it to compare with the next.
+type sceneGPU struct {
+	testGPU
+	last *scene.Scene
+}
+
+func (g *sceneGPU) Render(s *scene.Scene) error {
+	g.last = s
+	return g.testGPU.Render(s)
+}
+
+// TestClosedWindowKeepsNoFrame checks issue #1281: a closed window's host
+// lets go of its view, the elements and the scene of its last frame, and
+// the bitmaps they drew, in case something still holds the host (a
+// plugin, a renderer, the platform's objects of the window): only the
+// app's references keep them.
+func TestClosedWindowKeepsNoFrame(t *testing.T) {
+	var gpu *sceneGPU
+	h, _, frame := gpuHost(t, func() (gpuRenderer, error) {
+		gpu = &sceneGPU{}
+		return gpu, nil
+	})
+	src := image.NewRGBA(image.Rect(0, 0, 256, 256))
+	pix := weak.Make(&src.Pix[0]) // the bitmap's own, as NewBitmap takes them
+	bm := NewBitmap(src)
+	bitmap := weak.Make(bm)
+	h.rt.view = bitmapView(bm)
+	src, bm = nil, nil // the view alone holds it
+	frame()
+	if gpu == nil || gpu.frames != 1 {
+		t.Fatal("no frame drawn on the GPU")
+	}
+	h.detach()
+	if gpu.released != 1 {
+		t.Errorf("the renderer was released %d times", gpu.released)
+	}
+	for range 3 {
+		runtime.GC()
+	}
+	if bitmap.Value() != nil || pix.Value() != nil {
+		t.Errorf("the closed window's host keeps the bitmap %v, its pixels %v", bitmap.Value() != nil, pix.Value() != nil)
+	}
+	// A frame the surface asks for after it closed draws nothing.
+	frame()
+	if gpu.frames != 1 || h.last != nil {
+		t.Errorf("a closed window drew %d frames", gpu.frames)
+	}
+	runtime.KeepAlive(h)
+}
+
+// bitmapView returns a view that shows bm as an image and draws it.
+func bitmapView(bm *Bitmap) func(c *context) {
+	return func(c *context) {
+		coreImage(c, bm).Size(100, 100)
+		coreBox(c).Size(100, 100).Draw(func(p *Painter, r Rect) {
+			p.ImageRegion(bm, Rect{}, r, ImageOptions{})
+		})
 	}
 }

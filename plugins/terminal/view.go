@@ -30,7 +30,9 @@ import (
 // and zooms with Control held (Command on macOS; Options.OnZoom). Hold
 // Shift to select while a program takes the mouse, and Command (Control
 // elsewhere) to underline a link and open it on click: a hyperlink (OSC 8),
-// a URL printed as text, or a file path with Options.OpenLink.
+// a URL printed as text, or a file path with Options.OpenLink. Alt+click
+// (Option+click on macOS) on the input of a shell's prompt moves the
+// shell's cursor there, when the shell marks its prompt (OSC 133).
 func View(c *ui.Context, t *Terminal) ui.Element {
 	v := t.viewOf(c)
 	// A terminal's grid is left to right in a right-to-left interface too.
@@ -83,22 +85,22 @@ func cursorOf(shape int) ui.Cursor {
 	shapes := [...]ui.Cursor{
 		ui.CursorDefault,      // default
 		ui.CursorContextMenu,  // context-menu
-		ui.CursorDefault,      // help
+		ui.CursorHelp,         // help
 		ui.CursorPointer,      // pointer
-		ui.CursorDefault,      // progress
-		ui.CursorDefault,      // wait
-		ui.CursorCrosshair,    // cell
+		ui.CursorProgress,     // progress
+		ui.CursorWait,         // wait
+		ui.CursorCell,         // cell
 		ui.CursorCrosshair,    // crosshair
 		ui.CursorText,         // text
 		ui.CursorVerticalText, // vertical-text
 		ui.CursorAlias,        // alias
 		ui.CursorCopy,         // copy
 		ui.CursorMove,         // move
-		ui.CursorNotAllowed,   // no-drop
+		ui.CursorNoDrop,       // no-drop
 		ui.CursorNotAllowed,   // not-allowed
 		ui.CursorGrab,         // grab
 		ui.CursorGrabbing,     // grabbing
-		ui.CursorMove,         // all-scroll
+		ui.CursorAllScroll,    // all-scroll
 		ui.CursorResizeColumn, // col-resize
 		ui.CursorResizeRow,    // row-resize
 		ui.CursorResizeN,      // n-resize
@@ -113,8 +115,8 @@ func cursorOf(shape int) ui.Cursor {
 		ui.CursorResizeNS,     // ns-resize
 		ui.CursorResizeNESW,   // nesw-resize
 		ui.CursorResizeNWSE,   // nwse-resize
-		ui.CursorDefault,      // zoom-in
-		ui.CursorDefault,      // zoom-out
+		ui.CursorZoomIn,       // zoom-in
+		ui.CursorZoomOut,      // zoom-out
 	}
 	if shape < 0 || shape >= len(shapes) {
 		return ui.CursorDefault
@@ -151,12 +153,15 @@ type view struct {
 
 	// The grid, in device pixels: the cells, the baseline in a cell, and
 	// the origin of the grid relative to the element; scale is device
-	// pixels per DIP, and size the element's in DIPs.
+	// pixels per DIP, and size the element's in DIPs. fitW is the width of
+	// a cell at the font's own advance, which glyphs too wide for their
+	// cells shrink to, whatever Font.CellWidth makes the cells.
 	size                   [2]float32
 	font                   fontKey
 	fonts                  [4]ui.Font
 	scale                  float32
 	cellW, cellH, baseline int
+	fitW                   int
 	ox, oy                 int
 	cols, rows             int
 
@@ -190,17 +195,15 @@ type view struct {
 	// selecting tells that the primary button selects; reporting that a
 	// press went to the program, which gets the release too.
 	selecting, reporting bool
-	pointer              [2]float32
+	// extending keeps a Shift-click drag anchored to the existing selection.
+	extending bool
+	pointer   [2]float32
 	// barHeld tells that the primary button drags the scroll bar, held
 	// barGrab DIPs below the thumb's top; overBar that the pointer is over
-	// the bar, as of its last move, and barHover as of the last build.
-	// barLit is whether the last paint showed the bar hovered or held,
-	// barBack how many rows the viewport was above the bottom, and barSeen
-	// when either last changed, from which the bar fades out.
-	barHeld, overBar, barHover, barLit bool
+	// the bar, as of its last move, and barHover as of the last build;
+	// inView that the pointer was over the terminal, which shows the bar.
+	barHeld, overBar, barHover, inView bool
 	barGrab                            float32
-	barBack                            int64
-	barSeen                            time.Time
 	// hover is the link Command is held over, which a click opens and
 	// which shows underlined, hoverLink what it opens and hoverPath
 	// whether that is a file path (HoveredLink); linkPress: the primary
@@ -255,6 +258,10 @@ type pendingKey struct {
 	// taken: Options.OnKey took the key, whose text and release are
 	// dropped.
 	taken bool
+	// sent: the key went as Alt (Option as Alt on macOS), and the text
+	// macOS still types or composes for it is dropped; its release goes
+	// as any key's.
+	sent bool
 }
 
 // build updates the view as a frame builds.
@@ -295,7 +302,8 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 			v.hoverLink, v.hoverPath, v.hover = v.linkUnder(c.Modifiers(), v.pointer[0], v.pointer[1])
 		}
 		v.pointerAt = v.pointerShape(t.term, c.Modifiers())
-		v.barHover = e.Hovered() && v.overScrollbar(v.pointer[0], v.pointer[1])
+		v.inView = e.Hovered()
+		v.barHover = v.inView && v.overScrollbar(v.pointer[0], v.pointer[1])
 		if v.barHover || v.barHeld {
 			v.pointerAt = ui.CursorDefault // the bar's, not the text's
 		}
@@ -314,7 +322,17 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 	term := t.term
 	searching := term != nil && t.find.drive(term)
 	searched := t.find.status
+	// A synchronized update that does not end shows a second after it
+	// started (paint). Nothing else may ask for that frame: a program that
+	// writes nothing more, its cursor hidden or not blinking, asks for none.
+	var holdDue time.Time
+	if term != nil && t.held {
+		holdDue = t.heldSince.Add(time.Second)
+	}
 	t.mu.Unlock()
+	if !holdDue.IsZero() {
+		c.After(max(time.Until(holdDue), 0) + time.Millisecond)
+	}
 	if searched != v.searched {
 		v.searched = searched
 		if t.opts.OnSearch != nil {
@@ -580,6 +598,11 @@ func (v *view) input(ev ui.InputEvent) bool {
 		v.typed(ev.Text)
 		return true
 	case ui.InputCompose:
+		if p := v.pending; p != nil && p.sent {
+			// A dead key's, as ´ of Option-E: refused, so that macOS
+			// gives it up rather than compose the next key with it.
+			return false
+		}
 		v.preedit, v.preeditCaret, v.pending = ev.Text, ev.Caret, nil
 		return true
 	case ui.InputCommand:
@@ -631,14 +654,20 @@ func (v *view) input(ev ui.InputEvent) bool {
 	return false
 }
 
+// goos is the system whose keys keyDown reads; tests read macOS's.
+var goos = runtime.GOOS
+
 func (v *view) keyDown(ev ui.InputEvent) bool {
+	if ev.Key == ui.KeyUnknown {
+		return false // a modifier on its own, or a key of no name
+	}
 	t := v.t
 	if on := t.opts.OnKey; on != nil && on(ev.Mods, ev.Key) {
 		k, _ := vtKey(ev.Key)
 		v.pending = &pendingKey{key: k, taken: true}
 		return true
 	}
-	mac := runtime.GOOS == "darwin"
+	mac := goos == "darwin"
 	mods, key := ev.Mods, ev.Key
 	if b, ok := t.binding(mods, key); ok {
 		if v.perform(b.Action, b.Performable) || !b.Performable {
@@ -657,7 +686,7 @@ func (v *view) keyDown(ev ui.InputEvent) bool {
 	}
 	altMeta := mods&ui.Alt != 0 && (!mac || t.opts.OptionAsAlt)
 	// AltGr types text on Windows, where it is Control and Alt.
-	altGr := runtime.GOOS == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt
+	altGr := goos == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt
 	if typesText(key) && (mods&(ui.Ctrl|ui.Alt) == 0 || mods&ui.Alt != 0 && !altMeta && mods&ui.Ctrl == 0 || altGr) {
 		// The text it types comes next.
 		v.pending = &pendingKey{key: k, unshifted: unshifted, mods: mods, repeat: ev.Repeat}
@@ -670,6 +699,11 @@ func (v *view) keyDown(ev ui.InputEvent) bool {
 		text = string(unshifted)
 		if mods&ui.Shift != 0 {
 			text = shiftedText(key, unshifted)
+		}
+		if mac {
+			// interpretKeyEvents still types the key's text, or
+			// composes it, after this.
+			v.pending = &pendingKey{key: k, sent: true}
 		}
 	}
 	action := vt.KeyPress
@@ -767,12 +801,18 @@ func (v *view) clearScreen() bool {
 }
 
 func (v *view) keyUp(ev ui.InputEvent) bool {
+	if ev.Key == ui.KeyUnknown {
+		return false
+	}
 	k, unshifted := vtKey(ev.Key)
 	if p := v.pending; p != nil && p.taken && p.key == k {
 		// The release of a key OnKey or a keybind took, Command held or
 		// not.
 		v.pending = nil
 		return true
+	}
+	if p := v.pending; p != nil && p.sent && p.key == k {
+		v.pending = nil // sent as it went down
 	}
 	if k == vt.KeyUnidentified || ev.Mods&ui.Super != 0 {
 		return false
@@ -802,8 +842,8 @@ func (v *view) typed(text string) {
 	v.preedit = ""
 	p := v.pending
 	v.pending = nil
-	if p != nil && p.taken {
-		return // the text of a key OnKey took
+	if p != nil && (p.taken || p.sent) {
+		return // the text of a key OnKey took, or sent as Alt
 	}
 	if p == nil {
 		// Text without a key: of an input method, or every key typing
@@ -824,17 +864,23 @@ func (v *view) typed(text string) {
 		v.sendText(text)
 		return
 	}
+	mods := p.mods
+	if goos == "windows" && mods&(ui.Ctrl|ui.Alt) == ui.Ctrl|ui.Alt {
+		// AltGr made the character: the encoder would make a Control
+		// sequence of it with Control held, consumed or not (#1203).
+		mods &^= ui.Ctrl | ui.Alt
+	}
 	var consumed vt.Mods
 	r, _ := utf8.DecodeRuneInString(text)
 	if r != p.unshifted {
 		// Shift or Option made the character.
-		consumed = vtMods(p.mods & (ui.Shift | ui.Alt))
+		consumed = vtMods(mods & (ui.Shift | ui.Alt))
 	}
 	action := vt.KeyPress
 	if p.repeat {
 		action = vt.KeyRepeat
 	}
-	v.sendKey(vt.KeyEvent{Action: action, Key: p.key, Mods: vtMods(p.mods), Consumed: consumed, Text: text, Unshifted: p.unshifted})
+	v.sendKey(vt.KeyEvent{Action: action, Key: p.key, Mods: vtMods(mods), Consumed: consumed, Text: text, Unshifted: p.unshifted})
 }
 
 // sendKey sends a key, scrolling to the bottom and clearing the selection
@@ -1047,11 +1093,19 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		if ev.Button != 0 {
 			return false // the context menu
 		}
+		if ev.Mods&ui.Alt != 0 && v.clickToMove(col, row) {
+			return true
+		}
 		ref, ok := t.term.CellAt(col, row)
 		if !ok {
 			return false
 		}
 		v.selecting = true
+		v.extending = ev.Mods&ui.Shift != 0 && t.term.ExtendSelection(ref)
+		if v.extending {
+			v.gesture.Reset(t.term)
+			return true
+		}
 		if s, ok := v.gesture.Press(t.term, ref, px, py, uint64(time.Now().UnixNano())); ok {
 			t.term.SetSelection(&s)
 		} else {
@@ -1066,6 +1120,11 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		if !ok {
 			return true
 		}
+		if v.extending {
+			t.term.ExtendSelection(ref)
+			v.ticking = v.selectionScrollDirection() != 0
+			return true
+		}
 		if s, ok := v.gesture.Drag(t.term, ref, px, py, v.geometry(), ev.Mods&ui.Alt != 0); ok {
 			t.term.SetSelection(&s)
 		}
@@ -1077,7 +1136,9 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		}
 		v.selecting, v.ticking = false, false
 		ref, ok := t.term.CellAt(col, row)
-		if ok {
+		if v.extending {
+			v.extending = false
+		} else if ok {
 			v.gesture.Release(t.term, &ref)
 		} else {
 			v.gesture.Release(t.term, nil)
@@ -1166,7 +1227,7 @@ func (v *view) scrollbarEvent(ev ui.InputEvent) bool {
 	case v.barHeld:
 		v.dragScrollbar(ev.Y)
 	case v.overBar && ev.Kind == ui.InputPointerDown && ev.Button == 0:
-		y, h := thumb(v.t.term.Scrollbar(), v.size[1])
+		y, h := bar(v.t.term.Scrollbar(), ui.Rect{H: v.size[1]}).Thumb()
 		v.barGrab = h / 2
 		if ev.Y >= y && ev.Y < y+h {
 			v.barGrab = ev.Y - y
@@ -1187,13 +1248,7 @@ func (v *view) dragScrollbar(y float32) {
 	if sb.Total <= sb.Len {
 		return
 	}
-	_, h := thumb(sb, v.size[1])
-	travel := v.size[1] - h
-	if travel <= 0 {
-		return
-	}
-	f := max(0, min((y-v.barGrab)/travel, 1))
-	to := int(math.Round(float64(f) * float64(sb.Total-sb.Len)))
+	to := int(math.Round(float64(bar(sb, ui.Rect{H: v.size[1]}).OffsetAt(y - v.barGrab))))
 	if d := to - int(sb.Offset); d != 0 {
 		term.ScrollBy(d)
 		v.services.Invalidate()
@@ -1245,16 +1300,39 @@ func (v *view) geometry() vt.Geometry {
 // is held.
 func (v *view) autoscroll() {
 	t := v.t
-	dir := v.gesture.Autoscroll(t.term)
+	dir := 0
+	if v.extending {
+		dir = v.selectionScrollDirection()
+	} else {
+		dir = v.gesture.Autoscroll(t.term)
+	}
 	if dir == 0 || !v.selecting {
 		v.ticking = false
 		return
 	}
 	t.term.ScrollBy(dir)
 	col, row := v.cellAt(v.pointer[0], v.pointer[1])
+	if v.extending {
+		if ref, ok := t.term.CellAt(col, row); ok {
+			t.term.ExtendSelection(ref)
+		}
+		return
+	}
 	if s, ok := v.gesture.Tick(t.term, col, row, float64(v.pointer[0]*v.scale), float64(v.pointer[1]*v.scale), v.geometry(), false); ok {
 		t.term.SetSelection(&s)
 	}
+}
+
+// selectionScrollDirection follows a Shift-click drag past either edge.
+func (v *view) selectionScrollDirection() int {
+	y := v.pointer[1] * v.scale
+	if y < float32(v.oy) {
+		return -1
+	}
+	if y >= float32(v.oy+v.rows*v.cellH) {
+		return 1
+	}
+	return 0
 }
 
 // report reports the pointer to the program; t.mu is held.
@@ -1290,6 +1368,23 @@ func (v *view) report(ev ui.InputEvent) bool {
 		t.in.push(append([]byte(nil), out...))
 	}
 	return ev.Kind != ui.InputPointerMove || len(out) > 0
+}
+
+// wheelRows turns dy DIPs of a mouse wheel's notches (scrolling that is
+// not Precise) on goos into the rows the terminal scrolls. A notch scrolls
+// three rows on macOS and Linux, and on Windows as many as its "lines to
+// scroll" setting asks, 3 unless changed, as Windows Terminal does. The
+// DIPs are what the backends send: 40 a line on macOS (internal/darwin),
+// 50 a step on Linux (internal/linux), and 33 a line of the setting on
+// Windows (internal/windows), where a notch sends that many lines.
+func wheelRows(dy float32, goos string) float32 {
+	switch goos {
+	case "windows":
+		return dy / 33
+	case "linux":
+		return dy / 50 * 3
+	}
+	return dy / 40 * 3
 }
 
 // scroll scrolls the scrollback, or reports the wheel to the program.
@@ -1328,11 +1423,10 @@ func (v *view) scroll(ev ui.InputEvent) bool {
 		return true
 	}
 	ch := float32(v.cellH) / v.scale
-	dy := ev.DY
-	if !ev.Precise {
-		dy = dy / 40 * 3 * ch // a notch scrolls three rows
-	}
-	v.scrolled += dy
+	t.mu.Lock()
+	m := t.opts.ScrollMultiplier
+	t.mu.Unlock()
+	v.scrolled += m.rows(ev.DY, ch, ev.Precise, runtime.GOOS) * ch
 	rows := int(v.scrolled / ch)
 	v.scrolled -= float32(rows) * ch
 	if rows == 0 {

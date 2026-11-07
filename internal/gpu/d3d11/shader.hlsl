@@ -29,7 +29,7 @@ struct Inst {
 	float4 clipRadii : CLIPR;
 	float4 transform0 : TRANSFORM0;
 	float4 transform1 : TRANSFORM1;
-	float4 transform2 : TRANSFORM2; // the projective row's g and h
+	float4 transform2 : TRANSFORM2; // the projective row's g and h, and 1 where its constant is -1
 	float4 params : PARAMS; // kind, dashed or grayscale, sigma or paint, opacity
 };
 
@@ -55,7 +55,7 @@ struct VSOut {
 // frameH returns the frame point of local p, in homogeneous coordinates.
 float3 frameH(Inst i, float2 p) {
 	return float3(dot(i.transform0.xyz, float3(p, 1)), dot(i.transform1.xyz, float3(p, 1)),
-				  dot(float3(i.transform2.xy, 1), float3(p, 1)));
+				  dot(float3(i.transform2.xy, 1 - 2 * i.transform2.z), float3(p, 1)));
 }
 
 VSOut vs(uint vid : SV_VertexID, Inst i) {
@@ -150,7 +150,7 @@ Frame frameOf(VSOut v) {
 	// local one, which the affine map moves linearly: Direct3D 10's shaders
 	// pass on 16 values at most.
 	f.s = f.persp ? v.pos.xy : float2(dot(v.transform0.xyz, float3(v.pt.xy, 1)), dot(v.transform1.xyz, float3(v.pt.xy, 1)));
-	float3 r0 = v.transform0.xyz, r1 = v.transform1.xyz, r2 = float3(v.transform2.xy, 1);
+	float3 r0 = v.transform0.xyz, r1 = v.transform1.xyz, r2 = float3(v.transform2.xy, 1 - 2 * v.transform2.z);
 	f.c0 = cross(r1, r2);
 	f.c1 = cross(r2, r0);
 	f.c2 = cross(r0, r1);
@@ -383,8 +383,8 @@ float4 stopsAt(float4 c2, float t, bool lab) {
 
 // paint returns the premultiplied color at p of plain color, a gradient
 // mixed in sRGB (1) or Oklab (2), stripes (3), or a gradient of stops,
-// linear (4, 5) or conic (6, 7), mixed in sRGB or in Oklab, as
-// scene.Paint says.
+// linear (4, 5), conic (6, 7) or radial (8, 9), mixed in sRGB or in
+// Oklab, as scene.Paint says.
 float4 paint(float2 p, float mode, float4 rect, float4 c1, float4 c2, float4 g) {
 	if (mode < 0.5) {
 		return premul(c1);
@@ -394,12 +394,14 @@ float4 paint(float2 p, float mode, float4 rect, float4 c1, float4 c2, float4 g) 
 		if (mode < 5.5) {
 			float2 d = g.zw - g.xy;
 			t = dot(p - g.xy, d) / max(dot(d, d), 0.0001);
-		} else {
+		} else if (mode < 7.5) {
 			float2 d = p - g.xy;
 			t = (atan2(d.x, -d.y) - g.z) * 0.15915494309189535;
 			t -= floor(t);
+		} else {
+			t = length(p - g.xy) / max(g.z, 0.0001);
 		}
-		return stopsAt(c2, t, mode > 4.5 && mode < 5.5 || mode > 6.5);
+		return stopsAt(c2, t, mode > 4.5 && mode < 5.5 || mode > 6.5 && mode < 7.5 || mode > 8.5);
 	}
 	if (mode < 2.5) {
 		float2 d = g.zw - g.xy;

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -82,10 +83,31 @@ func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOp
 		opts |= fosForceShowHidden
 	}
 	setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, "", o.DefaultPath, o.Filters)
+	live, showing := true, false
 	if o.RegisterCancel != nil {
-		o.RegisterCancel(func() { comCall(dlg, fdClose, uintptr(0x800704c7)) })
+		o.RegisterCancel(func() {
+			if live {
+				live = false
+				if showing {
+					comCall(dlg, fdClose, uintptr(0x800704c7))
+				}
+			}
+		})
 	}
-	if failed(comCall(dlg, fdShow, ownerOf(parent))) {
+	hr := uintptr(0x800704c7)
+	if live {
+		showing = true
+		hr = comCall(dlg, fdShow, ownerOf(parent))
+		showing = false
+		if !live {
+			hr = 0x800704c7
+		}
+		live = false
+	}
+	if o.RegisterCancel != nil {
+		o.RegisterCancel(nil)
+	}
+	if failed(hr) {
 		cb(nil, nil) // canceled
 		return
 	}
@@ -175,6 +197,7 @@ func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, default
 	// in specs until the call returns.
 	type filterSpec struct{ Name, Spec *uint16 }
 	var specs []filterSpec
+	var types *mimeTypes
 	for _, f := range filters {
 		var patterns []string
 		for _, e := range f.Extensions {
@@ -182,6 +205,16 @@ func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, default
 				patterns = append(patterns, "*.*")
 			} else {
 				patterns = append(patterns, "*."+strings.TrimPrefix(e, "."))
+			}
+		}
+		if len(f.MIMETypes) > 0 && types == nil {
+			types = readMIMETypes()
+		}
+		for _, m := range f.MIMETypes {
+			for _, e := range types.extensions(m) {
+				if p := "*" + e; !slices.Contains(patterns, p) {
+					patterns = append(patterns, p)
+				}
 			}
 		}
 		if len(patterns) > 0 {

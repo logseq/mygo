@@ -52,7 +52,7 @@ struct Inst {
 	float4 clipRadii;
 	float4 params;				   // kind, dashed or grayscale, sigma or paint, opacity
 	float4 transform0, transform1; // local-to-frame rows, AA and clip-mask flags
-	float4 transform2;             // the projective row's g and h
+	float4 transform2;             // the projective row's g and h, and 1 where its constant is -1
 };
 
 // The color and, for dual-source blending, the source's alpha of each
@@ -75,7 +75,7 @@ struct VSOut {
 // frameH returns the frame point of local p, in homogeneous coordinates.
 float3 frameH(Inst i, float2 p) {
 	return float3(dot(i.transform0.xyz, float3(p, 1.0f)), dot(i.transform1.xyz, float3(p, 1.0f)),
-				  dot(float3(i.transform2.xy, 1.0f), float3(p, 1.0f)));
+				  dot(float3(i.transform2.xy, 1.0f - 2.0f * i.transform2.z), float3(p, 1.0f)));
 }
 
 // globals holds the frame's width and height in pixels, and 1 in z when
@@ -296,7 +296,7 @@ Frame frameOf(VSOut v, Inst i) {
 	f.persp = any(i.transform2.xy != 0.0f);
 	// In perspective, the pixel's center, as interpolating drifts.
 	f.s = f.persp ? v.pos.xy : v.world.xy / v.world.z;
-	float3 r0 = i.transform0.xyz, r1 = i.transform1.xyz, r2 = float3(i.transform2.xy, 1.0f);
+	float3 r0 = i.transform0.xyz, r1 = i.transform1.xyz, r2 = float3(i.transform2.xy, 1.0f - 2.0f * i.transform2.z);
 	f.c0 = cross(r1, r2);
 	f.c1 = cross(r2, r0);
 	f.c2 = cross(r0, r1);
@@ -544,10 +544,10 @@ float4 stopsAt(texture2d<float> stops, float4 c2, float t, bool oklab, bool wide
 
 // paint returns the premultiplied color at p of plain color, a gradient
 // mixed in sRGB (1) or Oklab (2), stripes (3), or a gradient of stops,
-// linear (4, 5) or conic (6, 7), mixed in sRGB or in Oklab, as
-// scene.Paint says. In a target that keeps colors outside the sRGB gamut
-// (wide, extended sRGB), an Oklab gradient keeps those its mix has, which
-// others clamp.
+// linear (4, 5), conic (6, 7) or radial (8, 9), mixed in sRGB or in
+// Oklab, as scene.Paint says. In a target that keeps colors outside the
+// sRGB gamut (wide, extended sRGB), an Oklab gradient keeps those its mix
+// has, which others clamp.
 float4 paint(float2 p, float mode, float4 rect, float4 c1, float4 c2, float4 g, bool wide, texture2d<float> stops) {
 	if (mode < 0.5f) {
 		return premul(c1);
@@ -557,12 +557,14 @@ float4 paint(float2 p, float mode, float4 rect, float4 c1, float4 c2, float4 g, 
 		if (mode < 5.5f) {
 			float2 d = g.zw - g.xy;
 			t = dot(p - g.xy, d) / max(dot(d, d), 0.0001f);
-		} else {
+		} else if (mode < 7.5f) {
 			float2 d = p - g.xy;
 			t = (atan2(d.x, -d.y) - g.z) * 0.15915494309189535f;
 			t -= floor(t);
+		} else {
+			t = length(p - g.xy) / max(g.z, 0.0001f);
 		}
-		return stopsAt(stops, c2, t, mode > 4.5f && mode < 5.5f || mode > 6.5f, wide);
+		return stopsAt(stops, c2, t, mode > 4.5f && mode < 5.5f || mode > 6.5f && mode < 7.5f || mode > 8.5f, wide);
 	}
 	if (mode < 2.5f) {
 		float2 d = g.zw - g.xy;

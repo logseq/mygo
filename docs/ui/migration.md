@@ -180,8 +180,10 @@ not a direct buffer edit during local composition.
 This is a source-breaking change to custom `ui.TextInputClient` implementations:
 add mandatory `EndComposition()` and `CancelComposition()` methods. There is no
 optional interface or legacy fallback. Built-in widgets, code/richtext editors
-and the text-input example implement the same phases. No native surface API
-change is required.
+and the text-input example implement the same phases. The internal
+`platform.TextInputClient` also requires typed `CancelComposition()` so native
+cancellation can roll back rather than accept the transaction; no optional
+fallback or new surface method is used.
 
 - `SetMarkedText` starts/updates pending preedit and remembers the original text
   and selection for cancellation. Do not publish a committed document from it.
@@ -323,6 +325,29 @@ codemod; it cannot infer how to write a derived value back to your model.
 
 ## Persistent identity
 
+### Committed text geometry
+
+The compatibility fork integrates upstream through
+`1db4e93bd48efa7e3f5a93985c8e89a4c6fa9e3d`. Upstream's `TextLine` belongs to
+`TextLayout`: its offsets count UTF-16 and its `Rect` is layout-local. The
+fork's committed handle observations use the distinct `CommittedTextLine`:
+node-relative rune offsets and window-DIP `Bounds`, valid only for the
+committed identity and frame.
+
+```go
+// Before: var lines []ui.TextLine // the fork's former committed result
+var lines []ui.CommittedTextLine
+if geometry, ok := handle.TextGeometry(c); ok {
+    lines, ok = geometry.Lines()
+    _ = lines
+    _ = ok
+}
+```
+
+Inferred `lines, ok := geometry.Lines()` calls need no source change. Do not
+alias either type or reinterpret its ranges/coordinates. `ScrollOffset(c)`
+continues returning `(x, y float32, ok bool)`.
+
 Store `ui.Handle` instead of an element:
 
 ```go
@@ -401,8 +426,10 @@ ui.List(c.Key("files"), &a.list, len(a.files)).Bind(&a.filesView).Grow(1).
 A Handle's shortcut may be declared before Bind. It runs after construction
 only if that window built an enabled control for the handle, so a hidden
 control takes no command. `ListRow` supplies the shared Context, index,
-selection and list focus. `List(c, state, n, func(i int))` also accepts a row
-callback directly. Configure fluent lists before calling Rows.
+selection, list focus, and the row's hover and press (`Hovered`, `Pressed`,
+`PointerPosition`), which row content draws without taking the click.
+`List(c, state, n, func(i int))` also accepts a row callback directly.
+Configure fluent lists before calling Rows.
 
 ## Persistent services and verification
 

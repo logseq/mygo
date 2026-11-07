@@ -209,11 +209,7 @@ func (r *Renderer) stash(s *scene.Scene, damage []image.Rectangle, known bool) e
 		return err
 	}
 	damage = r.pipelineDamage(damage, known)
-	var frame image.Rectangle
-	for _, d := range damage {
-		frame = frame.Union(d)
-	}
-	r.ages.Add(frame, !known)
+	r.ages.Add(damage, !known)
 	r.pending = pendingFrame{cb: send(cb, "retain"), whole: len(s.Effects) > 0}
 	r.pending.size.Width, r.pending.size.Height, r.pending.size.Clear = s.Width, s.Height, s.Clear
 	r.diff.Remember(s)
@@ -260,6 +256,7 @@ func (r *Renderer) finishPending(prefetch bool) error {
 	release(&p.cb)
 	r.lastRender = time.Now()
 	r.armTrim()
+	r.sweepIfDue()
 	return nil
 }
 

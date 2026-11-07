@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/egoist/mygo/i18n"
 )
@@ -24,10 +26,27 @@ const (
 type Config struct {
 	// Name is the display name of the app (default: directory name).
 	Name string `json:"name"`
+	// Slug names the app's files where a name must be plain ASCII: the disk
+	// images of macOS, the installers of Windows, the Linux executable, its
+	// desktop entry, icon and Debian package, the update archives and
+	// deltas of every platform, the variables of the install scripts, and
+	// the MIME types the app defines. Lower-case
+	// letters, digits and hyphens (default: the name as slugify makes it,
+	// as my-app of "My App" and yun-yin-le of "云音乐").
+	Slug string `json:"slug"`
 	// Identifier is the reverse-DNS bundle identifier.
 	Identifier string `json:"identifier"`
 	Version    string `json:"version"`
 	Copyright  string `json:"copyright"`
+	// Publisher is who makes the app, which Windows lists with the
+	// installed app (default: the copyright notice without its "©" and
+	// years, as "Example Inc." of "Copyright © 2026 Example Inc.").
+	Publisher string `json:"publisher"`
+	// License is the SPDX license expression of the app, such as "MIT" or
+	// "Apache-2.0 WITH LLVM-exception", which the PKGBUILD of Arch Linux
+	// records. It defaults to the license of package.json, for apps whose
+	// frontend declares one (default: package.json's license).
+	License string `json:"license"`
 	// Icon is a square PNG, ideally 1024x1024 (default:
 	// resources/icon.png when it exists). Beside it, the same name with
 	// -dev, as icon-dev.png, is the development app's, when it exists.
@@ -68,6 +87,14 @@ type Config struct {
 	// directories named after a platform, such as resources/linux-amd64,
 	// hold the files of one platform.
 	Resources []string `json:"resources"`
+	// ResourcesExclude leaves files of the project's resources directory
+	// out of the apps: patterns of their paths there, with slashes, whose
+	// segments match as path.Match matches them, but **, which matches any
+	// number of directories, as in "**/*.psd". A directory that matches is
+	// left out with what it holds. Go source files are always left out:
+	// builds read them, such as a package that embeds the files beside it,
+	// and apps never do. Listed Resources ship whole.
+	ResourcesExclude []string `json:"resourcesExclude"`
 
 	// URLSchemes are the custom URL schemes (deep links) of the app, e.g.
 	// "myapp" for myapp://…, whose URLs reach mygo.App.OnOpenURL. macOS
@@ -93,6 +120,21 @@ type Config struct {
 	langs     []appLanguage
 	langsErr  error
 	langsRead bool
+}
+
+// copyrightNoise is what publisher strips off a copyright notice: the
+// words and signs of copyright, years and ranges of years, and "All rights
+// reserved".
+var copyrightNoise = regexp.MustCompile(`(?i)\bcopyright\b|©|\(c\)|\b\d{4}\b(\s*[-–]\s*(\d{4}\b|present\b))?|\ball rights reserved\b\.?`)
+
+// publisher returns Publisher, or else the copyright notice without its
+// "©" and years, or "".
+func (c *Config) publisher() string {
+	if p := strings.TrimSpace(c.Publisher); p != "" {
+		return p
+	}
+	p := copyrightNoise.ReplaceAllString(c.Copyright, " ")
+	return strings.Trim(strings.Join(strings.Fields(p), " "), " ,;:-–")
 }
 
 // configName names the configuration file in messages.
@@ -126,7 +168,7 @@ func (c *Config) mimeType(fa FileAssociation) (string, bool) {
 		_, sub, _ := strings.Cut(fa.MimeType, "/")
 		return fa.MimeType, strings.HasPrefix(sub, "x-")
 	}
-	return "application/x-" + slugify(c.executableName()) + "-" + strings.ToLower(fa.Ext[0]), true
+	return "application/x-" + c.slug() + "-" + strings.ToLower(fa.Ext[0]), true
 }
 
 // I18n configures the catalogs of the app's messages: a JSON file per
@@ -148,7 +190,8 @@ type MacOS struct {
 	// compiled with actool, whose app icon is named AppIcon unless
 	// infoPlist's CFBundleIconName says otherwise, or an Icon Composer .icon,
 	// which builds compile on a Mac with Xcode 26 or later and skip
-	// elsewhere. The .icns from icon remains the fallback.
+	// elsewhere. The .icns from icon remains the fallback. Or it is an .icns
+	// in place of the one rendered from icon, for an icon drawn per size.
 	Icon string `json:"icon"`
 	// MinimumSystemVersion is the oldest macOS version supported (default
 	// "12.0").
@@ -252,8 +295,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("fileAssociations[%d].role is Editor or Viewer", i)
 		}
 	}
-	if ext := strings.ToLower(filepath.Ext(c.MacOS.Icon)); c.MacOS.Icon != "" && ext != ".car" && ext != ".icon" {
-		return fmt.Errorf("macos.icon %s is an Assets.car or an Icon Composer .icon", c.MacOS.Icon)
+	if ext := strings.ToLower(filepath.Ext(c.MacOS.Icon)); c.MacOS.Icon != "" && ext != ".car" && ext != ".icon" && ext != ".icns" {
+		return fmt.Errorf("macos.icon %s is an Assets.car, an Icon Composer .icon or an .icns", c.MacOS.Icon)
 	}
 	for name, file := range c.MacOS.HelperEntitlements {
 		if name == "" || file == "" {
@@ -263,12 +306,33 @@ func (c *Config) validate() error {
 	if c.Windows.Certificate != "" && c.Windows.SignCommand != "" {
 		return errors.New("windows.certificate and windows.signCommand exclude each other")
 	}
-	if cmd := c.Linux.Command; cmd != "" && !commandRe.MatchString(cmd) {
-		return fmt.Errorf("linux.command %q is not a command name (a letter or digit, then letters, digits, ., _, + or -)", cmd)
+	if strings.ContainsFunc(c.Windows.DisplayName, unicode.IsControl) {
+		return fmt.Errorf("windows.displayName %q cannot hold control characters, such as line breaks", c.Windows.DisplayName)
+	}
+	if n := c.Windows.InstallDirName; n != "" {
+		if err := checkFolderName(n); err != nil {
+			return fmt.Errorf("windows.installDirName %q is the name of the app's folder, which %w", n, err)
+		}
+	}
+	if c.Slug != "" && !slugRe.MatchString(c.Slug) {
+		return fmt.Errorf("slug %q is not a slug (lower-case letters and digits, with single hyphens between them)", c.Slug)
+	}
+	for i, cmd := range c.Linux.Command {
+		if !commandRe.MatchString(cmd) {
+			return fmt.Errorf("linux.command %q is not a command name (a letter or digit, then letters, digits, ., _, + or -)", cmd)
+		}
+		if slices.Contains(c.Linux.Command[:i], cmd) {
+			return fmt.Errorf("linux.command names %q twice", cmd)
+		}
 	}
 	if c.Updates != nil {
 		if err := c.Updates.validate(); err != nil {
 			return err
+		}
+	}
+	for _, p := range c.ResourcesExclude {
+		if !validPattern(p) {
+			return fmt.Errorf("resourcesExclude: %q is not a pattern of paths in the resources directory (path.Match patterns or **, between single slashes)", p)
 		}
 	}
 	for _, scheme := range c.URLSchemes {
@@ -299,6 +363,7 @@ func (c *Config) validate() error {
 
 var (
 	nonIdent = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+	slugRe   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	schemeRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*$`)
 	extRe    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_+-]*$`)
 )
@@ -429,6 +494,64 @@ func (c *Config) executableName() string {
 		return name
 	}
 	return "app"
+}
+
+// windowsName returns the name Windows shows the app by: windows.displayName,
+// or else Name.
+func (c *Config) windowsName() string {
+	if n := strings.TrimSpace(c.Windows.DisplayName); n != "" {
+		return n
+	}
+	return c.Name
+}
+
+// shortcutName is the file name of the app's shortcuts on Windows, without
+// .lnk: windowsName made a file name, or the executable's name without one.
+func (c *Config) shortcutName() string {
+	if name := fsName(c.windowsName()); name != "" {
+		return name
+	}
+	return c.executableName()
+}
+
+// installDirName returns the name of the app's install folder on Windows:
+// windows.installDirName, or else Name made a file name.
+func (c *Config) installDirName() string {
+	if n := strings.TrimSpace(c.Windows.InstallDirName); n != "" {
+		return n
+	}
+	return fsName(c.Name)
+}
+
+// reservedFileName matches the names Windows keeps for devices, which no
+// file or folder can have, with an extension or without.
+var reservedFileName = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$`)
+
+// checkFolderName reports why name, trimmed, cannot name a folder on
+// Windows: it is empty, "." or "..", holds a path separator or another
+// character file names cannot hold, ends with a dot, which Windows drops,
+// or is the name of a device.
+func checkFolderName(name string) error {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "":
+		return errors.New("is empty")
+	case strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || strings.ContainsRune(`/\:*?"<>|`, r) }):
+		return errors.New(`cannot hold control characters, path separators or :*?"<>|`)
+	case strings.HasSuffix(name, "."):
+		return errors.New("cannot be . or .., or end with a dot")
+	case reservedFileName.MatchString(name):
+		return errors.New("is the name of a device on Windows")
+	}
+	return nil
+}
+
+// slug returns Slug, or else Name as slugify makes it.
+func (c *Config) slug() string {
+	if c.Slug != "" {
+		return c.Slug
+	}
+	return slugify(c.executableName())
 }
 
 // fsName makes s usable as a file name on every platform.

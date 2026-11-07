@@ -1,8 +1,12 @@
 package ui
 
 import (
+	"bytes"
 	"image"
 	"image/color"
+	"image/png"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // OpenContextMenuAt requests this element's ContextMenu at window coordinates
@@ -12,7 +16,8 @@ import (
 func (e Element) OpenContextMenuAt(x, y float32) Element {
 	n := e.node()
 	if n != nil && !n.disabled() {
-		n.c.rt.askMenu(n.st, x, y, false)
+		z := n.c.rt.zoomFactor()
+		n.c.rt.askMenu(n.st, x/z, y/z, false)
 	}
 	return e
 }
@@ -57,6 +62,12 @@ func (e Element) OnMenuDismiss(fn func()) Element {
 func (it *MenuItem) ImagePNG(data []byte) *MenuItem {
 	if it.p != nil {
 		it.p.ImagePNG = append([]byte(nil), data...)
+		if it.p.Icon == nil && len(data) != 0 {
+			if _, err := png.DecodeConfig(bytes.NewReader(data)); err == nil {
+				linkMenuIcons()
+				it.p.Icon = &platform.MenuIcon{PNG: append([]byte(nil), data...), Template: false}
+			}
+		}
 	}
 	return it
 }

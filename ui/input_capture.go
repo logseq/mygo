@@ -193,6 +193,11 @@ func (rt *engine) captureInput(ev InputEvent, id uint64) bool {
 	rt.capturing = rt.captureSerial
 	defer func() { rt.capturing = previous }()
 	ev.Time = rt.frameTime()
+	z := rt.zoomFactor()
+	ev.X, ev.Y = ev.X*z, ev.Y*z
+	if ev.Kind == InputScroll && ev.Precise {
+		ev.DX, ev.DY = ev.DX*z, ev.DY*z
+	}
 	return rt.inputCapture(ev, InputTarget{owner: rt.owner, id: id, serial: rt.capturing})
 }
 

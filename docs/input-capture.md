@@ -1,3 +1,22 @@
+# Native ownership and cancellation
+
+The fork retains upstream logical/physical keys and `KeyCode` while supplying
+real native glyph `Text` on normal and raw key down/up. Text is metadata;
+native text-input commits remain the only character insertion route.
+`CaptureInput` returning true owns the event before native interpretation.
+Ordinary builtin printable-key bookkeeping does not consume that native text
+route. `ObserveInput` observes without owning it, and `OnTextKey` keeps its
+non-text-key interception contract. Browser raw clipboard C/X/V dispatches
+capture, observers and handlers without running builtin clipboard edits;
+unconsumed DOM clipboard events perform the actual operation once.
+
+Native capture loss cancels the original gesture, not a new hit at the current
+pointer. Legacy `HandleInput` receives canceled `InputPointerUp`;
+`HandleCapturedPointer` receives one explicit `InputPointerCancel` for its
+owned primary gesture instead. Blur, removal and menu cancellation cannot
+produce a click/drop, and a late real up cannot finish the canceled gesture.
+Secondary/middle activity does not cancel an independently held primary.
+
 # Window input capture
 
 ## Inherited pointer hit policy

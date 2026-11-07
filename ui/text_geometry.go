@@ -33,11 +33,11 @@ func (g CommittedSpace) node() (*node, bool) {
 		return nil, false
 	}
 	n := rt.nodeAt(g.slot)
-	if n == nil || n.id != g.id {
+	if n == nil || n.id != g.id || !n.committed {
 		return nil, false
 	}
 	for p := n; p != nil; p = p.parent {
-		if p.flags&(flagInvisible|flagInert) != 0 || p.backface && p.transform.facesAway() {
+		if p.hidden || p.flags&(flagInvisible|flagInert) != 0 || p.backface && p.transform.facesAway() {
 			return nil, false
 		}
 	}
@@ -50,7 +50,7 @@ func (g CommittedSpace) Bounds() (Rect, bool) {
 	if !ok {
 		return Rect{}, false
 	}
-	return transformRect(n.world, Rect{n.x, n.y, n.w, n.h}), true
+	return g.owner.rt.windowRect(transformRect(n.world, Rect{n.x, n.y, n.w, n.h})), true
 }
 
 // LocalToWindow maps a border-box point to window DIPs.
@@ -60,7 +60,8 @@ func (g CommittedSpace) LocalToWindow(point Point) (Point, bool) {
 		return Point{}, false
 	}
 	x, y := n.world.Point(n.x+point.X, n.y+point.Y)
-	return Point{x, y}, true
+	z := g.owner.rt.zoomFactor()
+	return Point{x * z, y * z}, true
 }
 
 // WindowToLocal inverts LocalToWindow; singular transforms report false.
@@ -73,7 +74,8 @@ func (g CommittedSpace) WindowToLocal(point Point) (Point, bool) {
 	if !ok {
 		return Point{}, false
 	}
-	x, y := inv.Point(point.X, point.Y)
+	z := g.owner.rt.zoomFactor()
+	x, y := inv.Point(point.X/z, point.Y/z)
 	return Point{x - n.x, y - n.y}, true
 }
 
@@ -137,7 +139,7 @@ func (g CommittedText) Caret(index int) (Rect, bool) {
 		return Rect{}, false
 	}
 	x, y, h := p.tl.CaretAt(text.CaretPosition{Index: a + index, Affinity: text.Downstream})
-	return transformRect(n.world, Rect{p.x + p.contentX() + x, p.y + p.contentY() + y, 1, h}), true
+	return g.space.owner.rt.windowRect(transformRect(n.world, Rect{p.x + p.contentX() + x, p.y + p.contentY() + y, 1, h})), true
 }
 
 // SelectionRects preserves wrapped and bidi-discontiguous selections.
@@ -148,7 +150,7 @@ func (g CommittedText) SelectionRects(first, last int) ([]Rect, bool) {
 	}
 	var out []Rect
 	for _, r := range p.tl.Selection(a+first, a+last) {
-		out = append(out, transformRect(n.world, Rect{p.x + p.contentX() + r.X, p.y + p.contentY() + r.Y, r.W, r.H}))
+		out = append(out, g.space.owner.rt.windowRect(transformRect(n.world, Rect{p.x + p.contentX() + r.X, p.y + p.contentY() + r.Y, r.W, r.H})))
 	}
 	return out, true
 }
@@ -163,25 +165,26 @@ func (g CommittedText) IndexAt(point Point) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	x, y := inv.Point(point.X, point.Y)
+	z := g.space.owner.rt.zoomFactor()
+	x, y := inv.Point(point.X/z, point.Y/z)
 	i := p.tl.PositionAt(x-p.x-p.contentX(), y-p.y-p.contentY()).Index
 	return max(a, min(b, i)) - a, true
 }
 
-// TextLine is a visual line's rune range and window-space box. Newline
+// CommittedTextLine is a visual line's rune range and window-space box. Newline
 // separators are excluded, as in the shaped layout's line table.
-type TextLine struct {
+type CommittedTextLine struct {
 	Start, End int
 	Bounds     Rect
 }
 
 // Lines returns the visual lines intersecting this element's text range.
-func (g CommittedText) Lines() ([]TextLine, bool) {
+func (g CommittedText) Lines() ([]CommittedTextLine, bool) {
 	n, p, a, b, ok := g.layout()
 	if !ok {
 		return nil, false
 	}
-	var out []TextLine
+	var out []CommittedTextLine
 	for _, line := range p.tl.Lines {
 		if line.End < a || line.Start > b {
 			continue
@@ -208,7 +211,7 @@ func (g CommittedText) Lines() ([]TextLine, bool) {
 			x, y, h := p.tl.CaretAt(text.CaretPosition{Index: lo, Affinity: text.Downstream})
 			box = Rect{p.x + p.contentX() + x, p.y + p.contentY() + y, 1, h}
 		}
-		out = append(out, TextLine{lo - a, hi - a, transformRect(n.world, box)})
+		out = append(out, CommittedTextLine{lo - a, hi - a, g.space.owner.rt.windowRect(transformRect(n.world, box))})
 	}
 	return out, true
 }
