@@ -72,8 +72,9 @@ type InputEvent struct {
 	PhysicalKey Key
 	Mods        Modifiers
 	Repeat      bool
-	// Text of InputText, InputCompose and InputCommand, and Caret the
-	// rune of an InputCompose's caret.
+	// Text of InputText, InputCompose and InputCommand. For key events,
+	// Text is the layout's characters when reported by the platform, not
+	// a text insertion; InputText commits text. Caret is an InputCompose's rune.
 	Text  string
 	Caret int
 	// X and Y locate the pointer relative to the element's box.

@@ -72,7 +72,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.zoom(float32(ev.Scale), Modifiers(ev.Mods))
 	case platform.KeyPressed:
 		rt.modsChanged(Modifiers(ev.Mods))
-		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), ev.Repeat)
+		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), ev.Repeat, ev.Text)
 	case platform.ModifiersChanged:
 		rt.modsChanged(Modifiers(ev.Mods))
 	case platform.KeyReleased:
@@ -82,11 +82,11 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 			key = physical
 		}
 		delete(rt.byPosition, physical)
-		if rt.captureInput(InputEvent{Kind: InputKeyUp, Mods: Modifiers(ev.Mods), Key: key, PhysicalKey: physical}, rt.focused) {
+		if rt.captureInput(InputEvent{Kind: InputKeyUp, Mods: Modifiers(ev.Mods), Key: key, PhysicalKey: physical, Text: ev.Text}, rt.focused) {
 			break
 		}
 		if h := rt.focusHandler(); h != nil {
-			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Mods: Modifiers(ev.Mods)})
+			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: key, PhysicalKey: physical, Mods: Modifiers(ev.Mods), Text: ev.Text})
 		}
 	case platform.TextInput:
 		rt.editEvent(rt.replaced(editEvent{kind: editInsert, text: ev.Text}, ev))
@@ -765,13 +765,13 @@ func (rt *engine) claimedBy(k keyEvent, window bool) bool {
 // keyDown handles a key pressed, and reports whether an element took it as
 // it came (HandleInput).
 func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
-	return rt.keyDownPhysical(mods, key, KeyUnknown, repeat)
+	return rt.keyDownPhysical(mods, key, KeyUnknown, repeat, "")
 }
 
 // keyDownPhysical is keyDown with the key by position (InputEvent.PhysicalKey).
 // A chord of a key the layout does not type as a US key, as S on a Cyrillic
 // layout, matches shortcuts by that position; plain typing is untouched.
-func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool) bool {
+func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool, text string) bool {
 	if key == KeyEscape && rt.pressed != nil && rt.pressed.capturedPointer {
 		rt.pointerCancel()
 		return true
@@ -788,14 +788,14 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, repeat bool
 	if rt.inspectKey(mods, key) {
 		return true
 	}
-	if rt.captureInput(InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Mods: mods, Repeat: repeat}, rt.focused) {
+	if rt.captureInput(InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Mods: mods, Repeat: repeat, Text: text}, rt.focused) {
 		return true
 	}
 	k := keyEvent{mods, key}
 	if key == KeyEscape && mods == 0 && rt.dragCancel() {
 		return true
 	}
-	if h := rt.focusHandler(); h != nil && !rt.claimed(k) && rt.deliver(h, InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Mods: mods, Repeat: repeat}) {
+	if h := rt.focusHandler(); h != nil && !rt.claimed(k) && rt.deliver(h, InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Mods: mods, Repeat: repeat, Text: text}) {
 		rt.blinkStart = rt.now()
 		return true
 	}
