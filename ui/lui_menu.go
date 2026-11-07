@@ -5,6 +5,18 @@ import (
 	"image/color"
 )
 
+// OpenContextMenuAt requests this element's ContextMenu at window coordinates
+// in DIPs. Call before ContextMenu while building, once per opening; continue
+// building ContextMenu and OnMenuDismiss to receive its choice and dismissal.
+// Like Element itself, this method is scoped to the current UI build pass.
+func (e Element) OpenContextMenuAt(x, y float32) Element {
+	n := e.node()
+	if n != nil && !n.disabled() {
+		n.c.rt.askMenu(n.st, x, y, false)
+	}
+	return e
+}
+
 // NativeMenuOpen reports whether owner has a native menu presented or queued
 // by the committed frame. Query after layout or between frames on the UI
 // thread. Hidden, omitted and expired bindings return false. This does not

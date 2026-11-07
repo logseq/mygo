@@ -1,5 +1,23 @@
 # Migrating to checked elements
 
+## Programmatic context-menu opening
+
+`Element.OpenContextMenuAt(x, y)` requests the element's existing `ContextMenu`
+at window coordinates in DIPs. Call it before `ContextMenu` in the build that
+opens the menu, not every rebuild. Continue building `ContextMenu` and
+`OnMenuDismiss` so selection is delivered before dismissal, including when the
+user cancels. Disabled or expired elements cannot open a menu. Existing
+secondary-click and keyboard context-menu behavior is unchanged.
+
+```go
+owner := ui.Box(c)
+if requested {
+    requested = false
+    owner.OpenContextMenuAt(x, y)
+}
+owner.ContextMenu(buildMenu).OnMenuDismiss(closed)
+```
+
 ## Build-time text flow query
 
 `Context.InTextFlow()` is an additive, read-only UI-thread query of the current
