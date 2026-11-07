@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ebitengine/purego"
@@ -518,6 +519,15 @@ func (s *surface) typed(event ptr) {
 	s.commit(string(r))
 }
 
+// keyvalText is layout glyph metadata, not an input-method text commit.
+func keyvalText(keyval uint32) string {
+	r := rune(gdkKeyvalToUnicode(keyval))
+	if !unicode.IsPrint(r) {
+		return ""
+	}
+	return string(r)
+}
+
 // commit sends text typed or committed by an input method.
 func (s *surface) commit(text string) {
 	if c := s.input.Client; c != nil {
@@ -877,6 +887,7 @@ func initSurfaceCallbacks() {
 			return false
 		}
 		k := keyvalKey(field[uint32](event, 28))
+		text := keyvalText(field[uint32](event, 28))
 		mods := gdkMods(field[uint32](event, 24))
 		physical := eventPhysicalKey(event)
 		// A key the layout types no US key for, as S on a Cyrillic layout,
@@ -886,7 +897,7 @@ func initSurfaceCallbacks() {
 		if k == platform.KeyUnknown {
 			switch {
 			case kind == platform.KeyReleased && physical != platform.KeyUnknown:
-				s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Mods: mods})
+				s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Mods: mods, Text: text})
 				return false
 			case !platform.KeyByPosition(k, physical, mods):
 				return false
@@ -896,7 +907,7 @@ func initSurfaceCallbacks() {
 			s.pressing = event
 			defer func() { s.pressing = 0 }()
 		}
-		s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Mods: mods})
+		s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Mods: mods, Text: text})
 		return true
 	})
 	cbSurfaceFocusIn = purego.NewCallback(func(widget, event, data ptr) bool {
