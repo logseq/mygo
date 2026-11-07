@@ -122,7 +122,7 @@ func (e *node) HandleInput(fn func(ev InputEvent) bool) *node {
 func (e *node) HandleCapturedPointer(fn func(ev InputEvent) bool) *node {
 	s := e.st
 	e.inputFn = func(ev InputEvent) bool {
-		if ev.Kind == InputPointerUp || ev.Kind == InputPointerCancel {
+		if ev.Kind == InputPointerUp && ev.Button == 0 || ev.Kind == InputPointerCancel {
 			s.capturedPointer = false
 		}
 		handled := fn(ev)

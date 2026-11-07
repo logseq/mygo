@@ -320,6 +320,10 @@ const interactive = flagClickable | flagFocusable | flagEditable | flagSelectabl
 func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks int) {
 	if rt.pressed != nil && rt.pressed.capturedPointer {
 		if button != 0 {
+			ev := InputEvent{Kind: InputPointerDown, Button: button, Clicks: max(1, clicks), Mods: mods}
+			if !rt.capturePointer(ev, x, y) {
+				rt.deliver(rt.pressed, ev)
+			}
 			return
 		}
 		rt.pointerCancel()
@@ -484,6 +488,13 @@ func (rt *engine) countPress(chain []uint64, target, h *state, n int) int {
 func (rt *engine) pointerUp(button, clicks int) {
 	if rt.downing > 0 {
 		rt.ups = append(rt.ups, [2]int{button, clicks})
+		return
+	}
+	if rt.pressed != nil && rt.pressed.capturedPointer && button != rt.pressButton {
+		ev := InputEvent{Kind: InputPointerUp, Button: button, Clicks: max(1, clicks), Mods: rt.mods}
+		if !rt.capturePointer(ev, rt.pointerX, rt.pointerY) {
+			rt.deliver(rt.pressed, ev)
+		}
 		return
 	}
 	if rt.pressed != nil && button == rt.pressButton {
