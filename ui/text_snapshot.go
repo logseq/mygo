@@ -19,7 +19,7 @@ func (r Handle) TextSnapshot(c *Context) (text string, anchor, caret int, ok boo
 	}
 	n := rt.nodeAt(b.element.slot)
 	s := rt.states[b.id]
-	if n == nil || n.id != b.id || n.kind != kindInput || s == nil || n.st != s || s.seen != rt.frame || s.pass != rt.pass || s.flags&flagEditable == 0 || s.editor == nil || s.editor.document != nil {
+	if n == nil || n.id != b.id || n.inHidden() || n.kind != kindInput || s == nil || n.st != s || s.seen != rt.frame || s.pass != rt.pass || s.flags&flagEditable == 0 || s.editor == nil || s.editor.document != nil {
 		return
 	}
 	return s.editor.String(), s.editor.anchor, s.editor.caret, true

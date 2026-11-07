@@ -1,40 +1,16 @@
 package ui
 
 import (
-	"github.com/egoist/mygo/internal/platform"
-	"slices"
 	"strings"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
-// ZIndex orders drawing and pointer hits among siblings without changing flow.
-func (e Element) ZIndex(index int) Element {
-	if n := e.node(); n != nil {
-		n.zIndex, n.zIndexSet = index, true
-	}
-	return e
-}
 func (e *node) layeredChildren() []*node {
-	active := false
-	for child := e.first; child != nil; child = child.next {
-		active = active || child.zIndexSet
-	}
-	if !active {
+	if !e.zOrder || e == e.c.overlay {
 		return nil
 	}
-	children := make([]*node, 0, e.nchild)
-	for child := e.first; child != nil; child = child.next {
-		children = append(children, child)
-	}
-	slices.SortStableFunc(children, func(a, b *node) int {
-		if a.zIndex < b.zIndex {
-			return -1
-		}
-		if a.zIndex > b.zIndex {
-			return 1
-		}
-		return int(b2i(a.flags&flagAbsolute != 0)) - int(b2i(b.flags&flagAbsolute != 0))
-	})
-	return children
+	return e.paintOrder(nil)
 }
 
 // DisabledOpacity replaces the toolkit's default disabled alpha. Element
