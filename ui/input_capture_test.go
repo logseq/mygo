@@ -1,6 +1,51 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/egoist/mygo/internal/platform"
+)
+
+func TestKeyCharacterMetadata(t *testing.T) {
+	for _, prevent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "focused handler", true: "capture only"}[prevent], func(t *testing.T) {
+			var captured, handled []InputEvent
+			tt := NewTester(func(c *Context) {
+				c.CaptureInput(func(ev InputEvent, _ InputTarget) bool {
+					if ev.Kind != InputKeyDown && ev.Kind != InputKeyUp {
+						return false
+					}
+					captured = append(captured, ev)
+					return prevent
+				})
+				Box(c).Size(80, 30).Focusable().AutoFocus().HandleInput(func(ev InputEvent) bool {
+					handled = append(handled, ev)
+					return true
+				})
+			}, 100, 60)
+			tt.Frame()
+			for _, text := range []string{"!", "ы", ""} {
+				for _, kind := range []platform.SurfaceEventKind{platform.KeyPressed, platform.KeyReleased} {
+					tt.rt.event(platform.SurfaceEvent{Kind: kind, Key: platform.KeyUnknown, PhysicalKey: platform.Key1, Mods: platform.ModShift, Repeat: kind == platform.KeyPressed, Text: text})
+				}
+			}
+			if len(captured) != 6 || !prevent && len(handled) != 6 || prevent && len(handled) != 0 {
+				t.Fatalf("capture/handler delivery counts = %d/%d", len(captured), len(handled))
+			}
+			for _, events := range [][]InputEvent{captured, handled} {
+				for i, ev := range events {
+					wantKind := InputKeyDown
+					if i%2 != 0 {
+						wantKind = InputKeyUp
+					}
+					if ev.Kind != wantKind || ev.Key != KeyUnknown || ev.PhysicalKey != Key1 || ev.Mods != Shift || ev.Repeat != (i%2 == 0) || ev.Text != []string{"!", "ы", ""}[i/2] {
+						t.Fatalf("event %d lost keyboard metadata: %+v", i, ev)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestCaptureClickOnPlainHit(t *testing.T) {
 	for _, tc := range []struct {
