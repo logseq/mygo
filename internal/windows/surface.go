@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"time"
+	"unicode"
 	"unicode/utf16"
 	"unsafe"
 
@@ -30,6 +31,9 @@ var (
 	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	procGetDoubleClickTime    = user32.NewProc("GetDoubleClickTime")
 	procGetMessageTime        = user32.NewProc("GetMessageTime")
+	procGetKeyboardState      = user32.NewProc("GetKeyboardState")
+	procGetKeyboardLayout     = user32.NewProc("GetKeyboardLayout")
+	procToUnicodeEx           = user32.NewProc("ToUnicodeEx")
 	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
 	procSetDIBitsToDevice     = gdi32.NewProc("SetDIBitsToDevice")
 	procImmGetContext         = imm32.NewProc("ImmGetContext")
@@ -640,7 +644,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			return 0, true
 		}
 		if k, physical, ok := keyAndPosition(wp, lp, false, modifiers); ok {
-			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Mods: modifiers, Repeat: lp&(1<<30) != 0})
+			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Mods: modifiers, Repeat: lp&(1<<30) != 0, Text: keyText(wp, lp)})
 		}
 		if !s.keyTaken && s.menuShortcut(wp, true) {
 			return 0, true
@@ -653,7 +657,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: modifiers})
 		}
 		if k, physical, ok := keyAndPosition(wp, lp, true, modifiers); ok {
-			s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, PhysicalKey: physical, Mods: modifiers})
+			s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, PhysicalKey: physical, Mods: modifiers, Text: keyText(wp, lp)})
 		}
 		return 0, m == wmKeyUp
 	case wmSysChar:
@@ -762,6 +766,32 @@ func wheelLines() int {
 		}
 	}
 	return surfaceWheelLines
+}
+
+// keyText queries the current layout without changing the keyboard buffer
+// used by TranslateMessage (dead keys, Alt+numpad and WM_CHAR).
+func keyText(vk, lp uintptr) string {
+	// ToUnicodeEx's non-mutating flag requires Windows 10 version 1607.
+	if windowsBuild() < 14393 {
+		return ""
+	}
+	var state [256]byte
+	if ok, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); ok == 0 {
+		return ""
+	}
+	layout, _, _ := procGetKeyboardLayout.Call(0)
+	var chars [16]uint16
+	n, _, _ := procToUnicodeEx.Call(vk, lp>>16&0xFF, uintptr(unsafe.Pointer(&state[0])), uintptr(unsafe.Pointer(&chars[0])), uintptr(len(chars)), 4, layout)
+	if int32(n) <= 0 || n > uintptr(len(chars)) {
+		return "" // Dead keys and keys without a printable translation.
+	}
+	text := string(utf16.Decode(chars[:n]))
+	for _, r := range text {
+		if !unicode.IsPrint(r) {
+			return ""
+		}
+	}
+	return text
 }
 
 // keyAndPosition returns the key of a WM_KEYDOWN or WM_KEYUP by virtual
