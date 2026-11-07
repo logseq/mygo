@@ -190,13 +190,14 @@ func (ref menuRef) is(it *MenuItem) bool {
 // MenuItem is an item of a Menu. Its methods set it up and return it, for
 // chaining, and Chosen reports the choice.
 type MenuItem struct {
-	run      *menuRun
-	seq      int
-	label    string
-	key      string
-	disabled bool
-	sub      bool
-	p        *platform.MenuItem // when the menu opens
+	run       *menuRun
+	seq       int
+	label     string
+	key       string
+	disabled  bool
+	sub       bool
+	p         *platform.MenuItem // when the menu opens
+	imageIcon *platform.MenuIcon
 	// What a menu drawn in the window shows of it beyond p (Danger,
 	// Trailing, Content).
 	danger   bool

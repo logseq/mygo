@@ -7,6 +7,27 @@ import (
 	"github.com/egoist/mygo/internal/platform"
 )
 
+func TestCapturedPointerReleaseClosesOnce(t *testing.T) {
+	var tt *Tester
+	var completed []InputEvent
+	tt = NewTester(func(c *Context) {
+		Box(c).Size(100, 40).HandleCapturedPointer(func(ev InputEvent) bool {
+			if ev.Kind == InputPointerUp || ev.Kind == InputPointerCancel {
+				completed = append(completed, ev)
+				if ev.Kind == InputPointerUp && !ev.Canceled {
+					tt.rt.close()
+				}
+			}
+			return true
+		})
+	}, 200, 60)
+	tt.Press(10, 15)
+	tt.Release(10, 15)
+	if len(completed) != 1 || completed[0].Kind != InputPointerUp || completed[0].Canceled {
+		t.Fatalf("completed = %+v; want one successful release", completed)
+	}
+}
+
 func TestCapturedPointerSurvivesOtherButtons(t *testing.T) {
 	for _, button := range []int{1, 2} {
 		for _, intercept := range []bool{false, true} {

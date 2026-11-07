@@ -62,10 +62,14 @@ func (e Element) OnMenuDismiss(fn func()) Element {
 func (it *MenuItem) ImagePNG(data []byte) *MenuItem {
 	if it.p != nil {
 		it.p.ImagePNG = append([]byte(nil), data...)
-		if it.p.Icon == nil && len(data) != 0 {
-			if _, err := png.DecodeConfig(bytes.NewReader(data)); err == nil {
-				linkMenuIcons()
-				it.p.Icon = &platform.MenuIcon{PNG: append([]byte(nil), data...), Template: false}
+		if it.p.Icon == nil || it.p.Icon == it.imageIcon {
+			it.p.Icon, it.imageIcon = nil, nil
+			if len(data) != 0 {
+				if _, err := png.DecodeConfig(bytes.NewReader(data)); err == nil {
+					linkMenuIcons()
+					it.imageIcon = &platform.MenuIcon{PNG: append([]byte(nil), data...), Template: false}
+					it.p.Icon = it.imageIcon
+				}
 			}
 		}
 	}

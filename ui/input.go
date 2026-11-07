@@ -697,27 +697,33 @@ func (rt *engine) pointerUp(button, clicks int, canceled bool) {
 			return
 		}
 	}
-	if p := rt.pressed; p != nil && p.input != nil {
-		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1), Canceled: canceled})
+	s := rt.pressed
+	releasing := s != nil && button == rt.pressButton
+	if releasing {
+		rt.pressed = nil
+	}
+	if s != nil && s.input != nil {
+		rt.deliver(s, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1), Canceled: canceled})
+	}
+	if rt.closed || rt.closing {
+		return
 	}
 	if button == 1 && !canceled && rt.menuRelease() {
 		return
 	}
-	s := rt.pressed
 	if s == nil {
 		if rt.releaseCapture != nil {
 			rt.releaseCapture(button)
 		}
 		return
 	}
-	if button != rt.pressButton {
+	if !releasing {
 		return
 	}
 	if rt.selection.dragging {
 		rt.moveTextSelection(rt.pointerX, rt.pointerY)
 		rt.selection.dragging = false
 	}
-	rt.pressed = nil
 	r := &s.releaseLater
 	r.due, r.x, r.y = true, rt.pointerX, rt.pointerY
 	// A press of the primary button that moved ends a drag; a click does

@@ -242,5 +242,5 @@ func (r Handle) Bounds(c *Context) Rect {
 	if s == nil {
 		return Rect{}
 	}
-	return Rect{s.x, s.y, s.w, s.h}
+	return rt.windowRect(Rect{s.x, s.y, s.w, s.h})
 }
