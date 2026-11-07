@@ -511,6 +511,9 @@ func naturalHeight(e *node, w, cbH float32) float32 {
 	if e.nmeasure < len(e.measures) {
 		e.measures[e.nmeasure] = measure{availW: w, h: h}
 		e.nmeasure++
+	} else {
+		copy(e.measures[:], e.measures[1:])
+		e.measures[len(e.measures)-1] = measure{availW: w, h: h}
 	}
 	return h
 }
