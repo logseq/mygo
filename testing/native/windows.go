@@ -4,6 +4,8 @@ package native
 
 import "github.com/egoist/mygo/internal/windows"
 
+func init() { windows.LinkMenuIcons() }
+
 type AccessNode struct {
 	Role, Label, Value string
 	Focused            bool

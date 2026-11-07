@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"syscall/js"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/gpu/gl"
@@ -42,13 +43,14 @@ type surface struct {
 	closed               bool
 	composing            bool
 	text                 platform.TextInputState
-	// copied tells that a key copying went to the content, which the copy
-	// event that follows does not repeat.
-	copied bool
+	// held are the keys the content got pressed and not yet released,
+	// whose key ups an input method or Command may keep (key).
+	held platform.HeldKeys
 
 	// downX and downY place the last press, where a context menu opens.
 	downX, downY float64
 	clicks       platform.ClickCounter
+	buttons      int
 }
 
 func newSurface(w *window) (*surface, error) {
@@ -102,7 +104,12 @@ type listener struct {
 	fn     js.Func
 }
 
-func (s *surface) send(ev platform.SurfaceEvent) bool { return s.w.h.SurfaceEvent(ev) }
+func (s *surface) send(ev platform.SurfaceEvent) bool {
+	if !s.held.Track(ev) {
+		return false
+	}
+	return s.w.h.SurfaceEvent(ev)
+}
 
 func (s *surface) listen() {
 	c, in := s.canvas, s.input
@@ -126,7 +133,9 @@ func (s *surface) listen() {
 		}
 	})
 	s.on(js.Global().Get("document"), "visibilitychange", true, func(js.Value) {
-		if !s.Occluded() {
+		if s.Occluded() {
+			s.send(platform.SurfaceEvent{Kind: platform.SurfaceHidden})
+		} else {
 			s.send(platform.SurfaceEvent{Kind: platform.SurfaceShown})
 			s.RequestFrame()
 		}
@@ -140,12 +149,41 @@ func (s *surface) listen() {
 		})
 	}
 
+	// The pointer is the primary one of its kind (isPrimary): the mouse,
+	// or the first finger or pen down. The others, as a second finger on
+	// a touchscreen, neither press nor move it, as on Windows and Linux,
+	// where a second finger presses nothing either: it would take the
+	// press of the first, and end it as it lifts.
 	s.on(c, "pointermove", true, func(e js.Value) {
+		if !primary(e) {
+			return
+		}
 		x, y := s.point(e)
-		s.send(platform.SurfaceEvent{Kind: platform.PointerMove, X: x, Y: y, Mods: s.mods(e)})
+		pointer, pressure := device(e)
+		s.send(platform.SurfaceEvent{Kind: platform.PointerMove, X: x, Y: y, Mods: s.mods(e), Pointer: pointer, Pressure: pressure})
+		// A button pressed or released while another is held comes as a
+		// move, which pointerdown and pointerup leave out; the desktop's
+		// windows hear each button.
+		if kind, b, ok := chord(e.Get("button").Int(), e.Get("buttons").Int()); ok {
+			ev := platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: b, Mods: s.mods(e), Pointer: pointer, Pressure: pressure}
+			if kind == platform.PointerDown {
+				s.buttons |= 1 << b
+				s.downX, s.downY = x, y
+				ev.Clicks = s.clicks.Press(b, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick)
+			} else {
+				if s.buttons&(1<<b) == 0 {
+					return
+				}
+				s.buttons &^= 1 << b
+			}
+			s.send(ev)
+		}
 	})
 	s.on(c, "pointerdown", false, func(e js.Value) {
 		e.Call("preventDefault")
+		if !primary(e) {
+			return
+		}
 		s.focus()
 		x, y := s.point(e)
 		button := e.Get("button").Int()
@@ -161,26 +199,46 @@ func (s *surface) listen() {
 		}
 		c.Call("setPointerCapture", e.Get("pointerId"))
 		b := buttonOf(button)
+		s.buttons |= 1 << b
 		s.downX, s.downY = x, y
 		clicks := s.clicks.Press(b, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick) // browsers tell no double-click settings
-		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: b, Clicks: clicks, Mods: s.mods(e)})
+		pointer, pressure := device(e)
+		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: b, Clicks: clicks, Mods: s.mods(e), Pointer: pointer, Pressure: pressure})
 	})
 	s.on(c, "pointerup", true, func(e js.Value) {
+		if !primary(e) {
+			return
+		}
 		button := e.Get("button").Int()
 		if button == 3 || button == 4 {
 			return
 		}
+		if s.buttons&(1<<buttonOf(button)) == 0 {
+			return
+		}
 		x, y := s.point(e)
-		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Mods: s.mods(e)})
+		pointer, _ := device(e)
+		s.buttons &^= 1 << buttonOf(button)
+		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Mods: s.mods(e), Pointer: pointer})
 	})
-	s.on(c, "pointercancel", true, func(e js.Value) {
+	// The browser took the pointer, as a touch it scrolls or zooms the
+	// page with, or one the system took: its buttons go up with no
+	// release, and the press commits nothing.
+	cancelPointer := func(e js.Value) {
+		if !primary(e) || s.buttons == 0 {
+			return
+		}
+		s.buttons = 0
 		x, y := s.point(e)
-		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel, X: x, Y: y, Mods: s.mods(e)})
-	})
-	s.on(c, "lostpointercapture", false, func(e js.Value) {
-		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
-	})
-	s.on(c, "pointerleave", true, func(js.Value) {
+		pointer, _ := device(e)
+		s.send(platform.SurfaceEvent{Kind: platform.PointerCancel, X: x, Y: y, Mods: s.mods(e), Pointer: pointer})
+	}
+	s.on(c, "pointercancel", true, cancelPointer)
+	s.on(c, "lostpointercapture", true, cancelPointer)
+	s.on(c, "pointerleave", true, func(e js.Value) {
+		if !primary(e) {
+			return
+		}
 		s.send(platform.SurfaceEvent{Kind: platform.PointerLeave})
 	})
 	// iOS sends a tap's mouse events even though its pointerdown was
@@ -312,6 +370,7 @@ func (s *surface) listen() {
 	})
 	s.on(in, "blur", true, func(js.Value) {
 		s.w.focused = false
+		s.buttons = 0
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		s.w.h.Blurred()
 	})
@@ -384,10 +443,7 @@ const lineHeight = 16
 // the text, which the clipboard event carries to the system's clipboard.
 func (s *surface) copy(e js.Value, cmd string) {
 	e.Call("preventDefault")
-	if !s.copied {
-		s.send(platform.SurfaceEvent{Kind: platform.SurfaceCommand, Text: cmd})
-	}
-	s.copied = false
+	s.send(platform.SurfaceEvent{Kind: platform.SurfaceCommand, Text: cmd})
 	s.w.b.mu.Lock()
 	text, all := s.w.b.clip, s.w.b.clipData
 	s.w.b.mu.Unlock()
@@ -413,6 +469,48 @@ func buttonOf(b int) int {
 		return 1
 	}
 	return 0
+}
+
+// primary reports whether a pointer event is the primary pointer's, as
+// the mouse is; browsers without isPrimary have the mouse alone.
+func primary(e js.Value) bool {
+	p := e.Get("isPrimary")
+	return p.Type() != js.TypeBoolean || p.Bool()
+}
+
+// device returns the device of a pointer event (pointerType) and its
+// pressure, which browsers give a mouse too: 0.5 while a button is down.
+func device(e js.Value) (platform.PointerKind, float64) {
+	k := platform.PointerMouse
+	if t := e.Get("pointerType"); t.Type() == js.TypeString {
+		switch t.String() {
+		case "pen":
+			k = platform.PointerPen
+		case "touch":
+			k = platform.PointerTouch
+		}
+	}
+	if p := e.Get("pressure"); p.Type() == js.TypeNumber {
+		return k, p.Float()
+	}
+	return k, 0
+}
+
+// chord returns the press or release of button, a DOM pointermove's, with
+// buttons the DOM's buttons held after it: a button going down or up while
+// another is held. ok is false for a move that changed no button (button
+// -1), or changed a side button's.
+func chord(button, buttons int) (kind platform.SurfaceEventKind, b int, ok bool) {
+	if button < 0 || button > 2 {
+		return 0, 0, false
+	}
+	b = buttonOf(button)
+	// buttons has a bit per button: 1 the primary, 2 the secondary, 4 the
+	// middle, as MyGo numbers them.
+	if buttons&(1<<b) != 0 {
+		return platform.PointerDown, b, true
+	}
+	return platform.PointerUp, b, true
 }
 
 // point returns where a pointer event happened in the canvas, in DIPs.
@@ -451,34 +549,46 @@ func (s *surface) mods(e js.Value) platform.Modifiers {
 // those typing text, copying and pasting, and those of its own (F5, F11,
 // F12, …).
 func (s *surface) key(e js.Value, down bool) {
-	if down {
-		s.copied = false
-	}
+	name, code := e.Get("key").String(), e.Get("code").String()
+	mods := s.mods(e)
 	if e.Get("isComposing").Bool() || e.Get("keyCode").Int() == 229 {
+		if !down {
+			// The input method took the key up of a key the content got
+			// pressed, as it began composing while the key was held: the
+			// key goes up all the same.
+			s.held.Lift(keyOf(name, code), codeKey(code), mods, s.send)
+		}
 		return
 	}
-	name := e.Get("key").String()
-	mods := s.mods(e)
 	switch name {
 	case "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph":
 		s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: mods})
+		if name == "Meta" && !down && s.w.b.mac {
+			// A Mac's browsers send no key up for the keys let go of
+			// while Command is held: they go up with it.
+			s.held.LiftAll(mods, s.send)
+		}
+		s.rawKey(e, code, codeKey(code), mods, down)
 		return
 	case "Dead", "Process", "Unidentified", "Compose":
+		if !down {
+			s.held.Lift(keyOf(name, code), codeKey(code), mods, s.send)
+		}
+		if name != "Process" {
+			s.rawKey(e, code, codeKey(code), mods, down)
+		}
 		return
 	}
-	code := e.Get("code").String()
-	k, physical := keyOf(name, code), codeKey(code)
+	k, physical, keyCode := keyOf(name, code), codeKey(code), platform.KeyCodeForDOM(code)
 	primary := mods&platform.ModCtrl != 0
 	if down && primary && mods&(platform.ModAlt|platform.ModShift) == 0 {
 		switch k {
-		case platform.KeyV:
-			// The paste event brings the clipboard's text.
-			return
-		case platform.KeyC, platform.KeyX:
-			// The content copies now, and the copy event that follows
-			// gives the browser the text.
-			s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, PhysicalKey: physical, Mods: mods, Repeat: e.Get("repeat").Bool()})
-			s.copied = true
+		case platform.KeyC, platform.KeyX, platform.KeyV:
+			// Clipboard events carry the system's data. Dispatch the key
+			// without running the built-in clipboard command a second time.
+			if s.send(platform.SurfaceEvent{Kind: platform.RawKeyPressed, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(name)}) {
+				e.Call("preventDefault")
+			}
 			return
 		}
 	}
@@ -486,7 +596,9 @@ func (s *surface) key(e js.Value, down bool) {
 	if down {
 		kind = platform.KeyPressed
 	}
-	s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Mods: mods, Repeat: e.Get("repeat").Bool()})
+	if s.send(platform.SurfaceEvent{Kind: kind, Key: k, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(name)}) {
+		e.Call("preventDefault")
+	}
 	if !down {
 		return
 	}
@@ -495,6 +607,31 @@ func (s *surface) key(e js.Value, down bool) {
 	case utf8.RuneCountInString(name) > 1 || primary:
 		e.Call("preventDefault")
 	}
+}
+
+// rawKey sends a key shortcuts have no name for by its position, code being
+// the KeyboardEvent's; what the content takes the browser does nothing with.
+func (s *surface) rawKey(e js.Value, code string, physical platform.Key, mods platform.Modifiers, down bool) {
+	keyCode := platform.KeyCodeForDOM(code)
+	if keyCode == platform.CodeUnknown {
+		return
+	}
+	kind := platform.RawKeyReleased
+	if down {
+		kind = platform.RawKeyPressed
+	}
+	if s.send(platform.SurfaceEvent{Kind: kind, PhysicalKey: physical, Code: keyCode, Mods: mods, Repeat: e.Get("repeat").Bool(), Text: domKeyText(e.Get("key").String())}) {
+		e.Call("preventDefault")
+	}
+}
+
+func domKeyText(name string) string {
+	if utf8.RuneCountInString(name) == 1 {
+		if r, _ := utf8.DecodeRuneInString(name); unicode.IsPrint(r) {
+			return name
+		}
+	}
+	return ""
 }
 
 // keyOf returns the key of a KeyboardEvent's key and code: letters and
@@ -652,6 +789,9 @@ var cursors = [...]string{
 	platform.CursorResizeS: "s-resize", platform.CursorResizeW: "w-resize", platform.CursorResizeColumn: "col-resize",
 	platform.CursorResizeRow: "row-resize", platform.CursorVerticalText: "vertical-text", platform.CursorCopy: "copy",
 	platform.CursorAlias: "alias", platform.CursorContextMenu: "context-menu", platform.CursorNone: "none",
+	platform.CursorProgress: "progress", platform.CursorWait: "wait", platform.CursorHelp: "help", platform.CursorCell: "cell",
+	platform.CursorZoomIn: "zoom-in", platform.CursorZoomOut: "zoom-out", platform.CursorAllScroll: "all-scroll",
+	platform.CursorNoDrop: "no-drop",
 }
 
 func (s *surface) SetCursor(c platform.Cursor) {
