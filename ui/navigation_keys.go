@@ -54,7 +54,7 @@ func (e *node) HandleNavigationKeys(keys []Key, fn func(InputEvent) bool) *node 
 func (rt *engine) navigationKey(ev InputEvent, focused uint64) bool {
 	bit := navigationKeyMask(ev.Key)
 	if bit == 0 || ev.Mods&^Shift != 0 || focused == 0 ||
-		rt.focused != focused || !rt.windowFocus() || rt.claimed(keyEvent{ev.Mods, ev.Key, ev.Repeat}) {
+		rt.focused != focused || !rt.windowFocus() {
 		return false
 	}
 	for s := rt.states[focused]; s != nil; s = rt.states[s.parent] {
