@@ -638,6 +638,9 @@ func computeBox(e *node, w, h float32) {
 		e.contentH = float64(max(uh, ch) + e.padY())
 	}
 	layoutAbsolute(e)
+	if e.trackLayoutWidth && !e.scrolls() {
+		e.keepLayoutWidth(uw, cw)
+	}
 }
 
 type flexItem struct {

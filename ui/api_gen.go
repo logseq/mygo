@@ -7996,6 +7996,19 @@ func (_handle Element) TopPercent(p float32) Element {
 	return wrapElement(_node.TopPercent(p))
 }
 
+// TrackLayoutWidth records a non-scrolling box's horizontal layout extent for
+// CommittedSpace.LayoutWidth. It does not change layout constraints or clipping.
+// Call it on every build whose committed width will be queried.
+func (_handle Element) TrackLayoutWidth() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.TrackLayoutWidth())
+}
+
 // TrackLines keeps in l where the text area lays out its lines.
 func (_handle Element) TrackLines(l *TextLines) Element {
 	_node := _handle.node()

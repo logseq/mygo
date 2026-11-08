@@ -338,21 +338,22 @@ type node struct {
 
 	fitting *fittingBuilder
 
-	epoch         uint64
-	key           any
-	valueInput    func(*node)
-	c             *context
-	id            uint64
-	flags         uint32
-	pointerEvents int8
-	committed     bool
-	parent        *node
-	first         *node
-	last          *node
-	next          *node
-	nchild        int
-	depth         int
-	st            *state
+	epoch            uint64
+	key              any
+	valueInput       func(*node)
+	c                *context
+	id               uint64
+	flags            uint32
+	pointerEvents    int8
+	committed        bool
+	trackLayoutWidth bool
+	parent           *node
+	first            *node
+	last             *node
+	next             *node
+	nchild           int
+	depth            int
+	st               *state
 	// track is the ScrollState of a scroll container (TrackScroll).
 	track *ScrollState
 

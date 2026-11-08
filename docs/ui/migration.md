@@ -1,5 +1,42 @@
 # Migrating to checked elements
 
+## Committed layout widths of clipped boxes
+
+`Element.TrackLayoutWidth()` opts a non-scrolling box into
+`CommittedSpace.LayoutWidth() (clientWidth, contentWidth float32, ok bool)`.
+Query through a bound `Handle` after the final layout, for example in
+`Context.AfterFrame`. Values are local logical DIPs, not transformed window
+coordinates: both include padding and exclude borders. Content width is at
+least client width.
+
+```go
+ui.Row(c).Width(180).Clip().TrackLayoutWidth().Bind(&strip).Children(pills)
+c.AfterFrame(func() {
+    if space, ok := strip.Coordinates(c); ok {
+        if client, content, ok := space.LayoutWidth(); ok {
+            setOverflow(content > client+1)
+        }
+    }
+})
+```
+
+The extent combines the box's own finite-layout flow allocation with its
+direct children's final border boxes and inline-end margins, followed by the
+container's inline-end padding. Relative and absolute placement are included;
+hidden and leaving children are not. Right-to-left layout measures toward the
+left. Transforms, painted ink and overflow escaping grandchildren are excluded.
+This bounded layout metric is **not** a general recursive DOM `scrollWidth`.
+For a nowrap pills strip, expose each pill's nonshrinking width on a direct
+child box, including any button inside it; do not rely on an overflowing
+grandchild to enlarge that box. Keep sibling controls outside the measured
+strip, as in the web layout.
+
+Tracking does not enable scrolling, change finite clipping constraints, or
+change existing scroll metrics. Untracked boxes, scrollers, non-box elements,
+hidden elements and uncommitted measurement probes report false. Geometry
+expires at the next build or window close, as with `CommittedSpace.Bounds`.
+Existing callers need no migration; apply tolerances such as `+1` in the app.
+
 ## Programmatic context-menu opening
 
 `Element.OpenContextMenuAt(x, y)` requests the element's existing `ContextMenu`
