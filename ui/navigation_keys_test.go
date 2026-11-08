@@ -49,7 +49,7 @@ func TestNavigationKeysRespectFocusedChildAndNearestOwner(t *testing.T) {
 				case "field", "readonly", "password":
 					input := TextInput(c, &text).Focus()
 					if tc.child == "readonly" {
-						input.ReadOnly()
+						input.ReadOnly(true)
 					}
 					if tc.child == "password" {
 						input.Password()
