@@ -69,16 +69,17 @@ const textLayoutSet = setFamily | setSize | setWeight | setItalic | setLineHeigh
 type layoutRecord struct {
 	// layout is engine.layouts of the last layout that saw the element,
 	// and ok tells that what follows, to parent, is what it saw then.
-	layout     uint64
-	ok         bool
-	style      layoutStyle
-	flags      uint32
-	hidden     bool
-	ts         textLayout
-	cols, rows []Track
-	spans      string
-	media      [2]float32
-	placeOn    uint64
+	layout           uint64
+	ok               bool
+	style            layoutStyle
+	flags            uint32
+	hidden           bool
+	trackLayoutWidth bool
+	ts               textLayout
+	cols, rows       []Track
+	spans            string
+	media            [2]float32
+	placeOn          uint64
 	// parent is the ID of its parent, index its place among its siblings
 	// and nchild how many children it had.
 	parent        uint64
@@ -153,12 +154,14 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 		r.ts = layoutOfText(&e.ts)
 	}
 	equal := fresh && r.style == e.layoutStyle && r.flags == e.flags&layoutFlags && r.hidden == e.hidden &&
+		r.trackLayoutWidth == e.trackLayoutWidth &&
 		r.spans == spans && r.media == media && r.placeOn == placeOn &&
 		r.parent == parent && r.index == int32(index) && r.nchild == int32(e.nchild) &&
 		slices.Equal(r.cols, e.cols) && slices.Equal(r.rows, e.rows)
 	if !equal {
 		r.ok = true
 		r.style, r.flags, r.hidden = e.layoutStyle, e.flags&layoutFlags, e.hidden
+		r.trackLayoutWidth = e.trackLayoutWidth
 		if !slices.Equal(r.cols, e.cols) || !slices.Equal(r.rows, e.rows) {
 			r.cols, r.rows = append(r.cols[:0], e.cols...), append(r.rows[:0], e.rows...)
 		}
