@@ -453,6 +453,7 @@ type node struct {
 	// the text it takes is (TextCaret).
 	inputFn    func(InputEvent) bool
 	observeFn  func(InputEvent) // the input in it (ObserveInput)
+	navigation *navigationKeys
 	textClient TextInputClient
 	caret      Rect
 	takesText  bool

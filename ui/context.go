@@ -903,13 +903,15 @@ type state struct {
 
 	// input, caret and takesText are those of the last frame's element
 	// (HandleInput, TextCaret).
-	input       func(InputEvent) bool
-	observe     func(InputEvent) // ObserveInput
-	textClient  TextInputClient
-	textAdapter *textInputAdapter
-	caret       Rect
-	takesText   bool
-	noIME       bool
+	input             func(InputEvent) bool
+	observe           func(InputEvent) // ObserveInput
+	navigation        *navigationKeys
+	navigationBarrier bool
+	textClient        TextInputClient
+	textAdapter       *textInputAdapter
+	caret             Rect
+	takesText         bool
+	noIME             bool
 	// copyData is what a Selectable container's selection copies as
 	// (CopyData).
 	copyData func(parts []SelectedText) transfer.Data
