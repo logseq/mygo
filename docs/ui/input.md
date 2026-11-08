@@ -21,6 +21,29 @@ if card.DoubleClicked() {
 }
 ```
 
+## Arrows left by child controls
+
+`element.HandleNavigationKeys(keys, fn)` opts an element into handling arrows
+left by its focused child, before default scrolling. `keys` accepts only
+`ui.KeyLeft`, `ui.KeyRight`, `ui.KeyUp` and `ui.KeyDown`; other keys panic.
+Only unmodified or Shift-modified arrows are routed. Existing shortcuts and
+native child handling retain priority. Enter, Space and all other keys are
+unchanged.
+
+The nearest registered scope owns navigation. If it does not list an arrow,
+or its callback returns false, that arrow retains its default behavior; an
+outer scope is not tried. Editing and read-only text controls, compound
+fields and native overlay boundaries between the focus and the owner block
+routing. A scope inside an overlay handles only its own content, not input
+across the overlay boundary.
+
+The callback receives `ui.InputEvent`, runs synchronously on the UI thread
+between builds, and returns true to claim the arrow. A frame follows even
+when it returns false. Do not retain Elements, build UI or enter a nested
+event loop in it. An omitted registration, empty key list or nil callback
+removes the handler on the next commit. This API does not make an element
+focusable or register a shortcut, capture callback or global listener.
+
 ## The pointer
 
 `Hovered`, `Pressed`, `Clicked`, `DoubleClicked`, `RightClicked`, `Dragged`

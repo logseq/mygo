@@ -317,6 +317,7 @@ type engine struct {
 
 	pointerX, pointerY float32
 	inputCapture       func(InputEvent, InputTarget) bool
+	routeNavigation    func(InputEvent, uint64) bool
 	captureClicks      *inputCaptureState
 	releaseCapture     func(button int)
 	captureSerial      uint64
@@ -1457,6 +1458,9 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	s.webView = e.webView
 	s.role, s.focusHighlights = e.role, e.focusHighlights
 	s.input, s.caret, s.takesText, s.noIME = e.inputFn, e.caret, e.takesText, e.noIME
+	s.navigation = e.navigation
+	s.navigationBarrier = hidden || e.hidden || e.focusTo != nil || e.webView != nil ||
+		e.popover != nil || e.id == overlayID || e.flags&flagModal != 0
 	if rt.pressed == s && s.capturedPointer && s.flags&flagDisabled != 0 {
 		rt.pointerCancel(rt.pressButton)
 	}

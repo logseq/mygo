@@ -1041,6 +1041,7 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 		return true
 	}
 	input := InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat, Text: text}
+	focused := rt.focused
 	if rt.captureInput(input, rt.focused) {
 		return true
 	}
@@ -1133,6 +1134,9 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 			rt.requestFrame()
 			return false
 		}
+	}
+	if rt.routeNavigation != nil && rt.routeNavigation(input, focused) {
+		return true
 	}
 	// Space types a space where the focus takes text, rather than
 	// paging, as in a web page's field: the text comes after the key.
