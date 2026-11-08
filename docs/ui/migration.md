@@ -37,6 +37,28 @@ hidden elements and uncommitted measurement probes report false. Geometry
 expires at the next build or window close, as with `CommittedSpace.Bounds`.
 Existing callers need no migration; apply tolerances such as `+1` in the app.
 
+## Opt-in child-first arrow navigation
+
+`Element.HandleNavigationKeys(keys, fn)` adds an optional nearest-owner route
+after child/native handling and existing shortcuts, before default scrolling.
+Existing applications need no migration. Do not replace `OnShortcut` globally:
+use this only when a container owns arrows left by non-editing descendants.
+
+```go
+ui.Row(c).HandleNavigationKeys([]ui.Key{ui.KeyLeft, ui.KeyRight}, func(ev ui.InputEvent) bool {
+    movePillFocus(ev.Key, ev.Mods&ui.Shift != 0)
+    return true
+}).Children(buildPills)
+```
+
+Only the four arrows, with no modifiers or Shift, are eligible; unsupported
+declarations panic. Enter and Space remain with their original controls. A
+false result keeps default handling but does not try an outer scope. Text
+controls, compound fields and intervening native overlay boundaries block
+routing. Omission, an empty list or a nil callback unregisters on commit.
+The synchronous UI-thread callback must not build UI or retain Elements; a
+frame follows either result. See [input](input.md#arrows-left-by-child-controls).
+
 ## Programmatic context-menu opening
 
 `Element.OpenContextMenuAt(x, y)` requests the element's existing `ContextMenu`

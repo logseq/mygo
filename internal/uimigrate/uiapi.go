@@ -241,6 +241,7 @@ var elementChains = map[string]bool{
 	"Grow":                   true,
 	"HandleCapturedPointer":  true,
 	"HandleInput":            true,
+	"HandleNavigationKeys":   true,
 	"HandleTextInput":        true,
 	"HasPopup":               true,
 	"Height":                 true,

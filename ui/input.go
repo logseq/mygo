@@ -1041,6 +1041,7 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 		return true
 	}
 	input := InputEvent{Kind: InputKeyDown, Key: key, PhysicalKey: physical, Code: code, Mods: mods, Repeat: repeat, Text: text}
+	focused := rt.focused
 	if rt.captureInput(input, rt.focused) {
 		return true
 	}
@@ -1134,9 +1135,19 @@ func (rt *engine) keyDownPhysical(mods Modifiers, key, physical Key, code KeyCod
 			return false
 		}
 	}
+	claimed := rt.claimed(k)
+	if rt.routeNavigation != nil && !claimed {
+		routeFocus := rt.focused
+		if rt.routeNavigation(input, focused) {
+			return true
+		}
+		if rt.focused != routeFocus {
+			claimed = rt.claimed(k)
+		}
+	}
 	// Space types a space where the focus takes text, rather than
 	// paging, as in a web page's field: the text comes after the key.
-	if !rt.claimed(k) && !(typesText(k) && rt.focusTakesText()) && rt.scrollKey(mods, key) {
+	if !claimed && !(typesText(k) && rt.focusTakesText()) && rt.scrollKey(mods, key) {
 		return false
 	}
 	rt.keys = append(rt.keys, k)

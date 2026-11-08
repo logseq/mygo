@@ -5367,6 +5367,31 @@ func (_handle Element) HandleInput(fn func(ev InputEvent) bool) Element {
 	return wrapElement(_node.HandleInput(fn))
 }
 
+// HandleNavigationKeys handles arrows left by the focused control in the
+// element's subtree, before they scroll. keys may contain only KeyLeft,
+// KeyRight, KeyUp and KeyDown; another key panics. With no keys or a nil fn,
+// the element stops handling navigation. Omission in a build does the same.
+//
+// The nearest registered element owns navigation: an arrow it did not list,
+// or that fn leaves, never goes to an outer navigation handler. Existing
+// shortcuts and native control handling take priority. Text fields, editors
+// (including read-only editors), compound fields and overlay boundaries
+// between the focus and the owner prevent routing. Only no modifiers or Shift
+// are admitted; typing, composition and other keys are unchanged.
+//
+// fn runs on the UI thread as the key arrives, between builds; true takes it,
+// false leaves its default handling. A frame follows either result. Do not
+// build UI, retain Elements or run a nested event loop in fn.
+func (_handle Element) HandleNavigationKeys(keys []Key, fn func(arg0 InputEvent) bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.HandleNavigationKeys(keys, fn))
+}
+
 // HandleTextInput connects an element to the system's text-input services.
 // Pair it with HandleInput for keys, pointer selection and Edit-menu commands,
 // and Draw for rendering. It adds focus and the text cursor without creating

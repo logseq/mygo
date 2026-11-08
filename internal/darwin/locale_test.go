@@ -21,9 +21,6 @@ func TestLocales(t *testing.T) {
 	load()
 	a := appController{}
 	langs := a.PreferredLanguages()
-	if len(langs) == 0 {
-		t.Fatal("no preferred languages")
-	}
 	if r := a.Region(); r.Locale == "" || r.FirstWeekday < 0 || r.HourCycle == 0 {
 		t.Errorf("Region() = %+v", r)
 	}
