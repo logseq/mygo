@@ -70,17 +70,7 @@ func appleLanguages(own bool) []string {
 }
 
 func (a appController) PreferredLanguages() []string {
-	if langs := appleLanguages(false); len(langs) > 0 {
-		return langs
-	}
-	// A user who never ordered languages: the system's.
-	var out []string
-	withPool(func() {
-		for _, s := range arrayItems(send(class("NSLocale"), "preferredLanguages")) {
-			out = append(out, goString(s))
-		}
-	})
-	return out
+	return appleLanguages(false)
 }
 
 func (a appController) SavedLocale() (string, bool) {
